@@ -140,7 +140,7 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
 
         # Check that all WeightLoadable attributes are implemented.
         self.validate_weightloadable()
-            
+        
     def forward(
         self, 
         layer_outputs: List[torch.Tensor]
@@ -242,6 +242,21 @@ class YOLOv3(nn.Module):
 
         return scale_anchors, strides, fmap_sizes
     
+    def init_detector_weights(self, input_shape: tuple):
+        device = next(self.parameters()).device
+        dummy_X = torch.zeros(input_shape).to(device)
+        _ = self.forward(dummy_X) # Initalize lazy layers
+
+        for module in self.detector.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+                    
+            elif isinstance(module, nn.BatchNorm2d):
+                nn.init.constant_(module.weight, 1.0)
+                nn.init.constant_(module.bias, 0.0)
+
     def forward(self, X):
         _, layer_outputs = self.backbone(X)
         scale_outputs = self.detector(layer_outputs)
