@@ -2,7 +2,6 @@
 # Imports & Dependencies
 #####################################
 import torch
-from torch.utils.data import Dataset
 from torchvision.tv_tensors import BoundingBoxes
 
 import os
@@ -36,22 +35,16 @@ COCO_2014_URLS = {
 #####################################
 # COCO Dataset Class
 #####################################
-class COCODataset(Dataset, DetectionDatasetBase):
+class COCODataset(DetectionDatasetBase):
     '''
-    input_size (int or Tuple[int, int]): Input image size, used to compute feature map sizes.
-                                            If `resize=True`, all images will be resized to this.
-                                            If `resize=False`, the user-supplied `transforms` 
-                                            must resize to `input_size`, or the target encoding may be misaligned.
+    input_size (int or Tuple[int, int]): Height and width used to resize images to meet model input expectations.
+                                         If `int`, the resized image is assumed to be square.
     scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
                                         Each element has shape: (num_anchors, 2), where the last dimension gives 
                                         the (width, height) of the anchor in units of the input size (pixels).
     strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale in `scale_anchors`. 
                                                     Each stride represents the downsampling factor between the input image 
                                                     and the feature map at that scale.
-    resize (bool): Whether to apply image resizing to `input_size`, pixel rescaling to [0, 1], 
-                    and tensor conversion *after* any user-supplied `transforms`. 
-                    If `resize = True`, user-supplied `transforms` should exclude 
-                    these transformations to avoid duplication. Default is True.
     ignore_threshold (float): The IoU threshold used to encode which anchor boxes will be ignored during loss calculation.
                                 Anchor boxes that do not have the highest IoU with a ground truth box, 
                                 but have an IoU >= ignore_threshold, 
@@ -64,14 +57,13 @@ class COCODataset(Dataset, DetectionDatasetBase):
                  input_size: Union[int, Tuple[int, int]],
                  strides: List[Union[int, Tuple[int, int]]],
                  train: bool = True, 
-                 transforms: Optional[Callable] = None,
-                 resize: bool = True,
+                 single_augs: Optional[Callable] = None,
+                 mosaic_augs: Optional[Callable] = None,
+                 mosaic_prob: float = 0.0,
                  ignore_threshold: float = 0.5,
+                 min_box_scale: float = 0.01,
                  max_imgs: Optional[int] = None):
-        Dataset.__init__(self)
         self.train = train
-        self.transforms = transforms
-        self.resize = resize
         self.max_imgs = max_imgs
         
         if train:
@@ -85,11 +77,20 @@ class COCODataset(Dataset, DetectionDatasetBase):
         label_path = os.path.join(root, 'coco.names') # Path to COCO class labels
 
         # Initialize base detection dataset attributes 
-            #  (scale_anchors, fmap_sizes, classes, resize_transforms, etc.)
-        DetectionDatasetBase.__init__(self, root = root, scale_anchors = scale_anchors,
-                                      input_size = input_size, strides = strides, 
-                                      label_path = label_path, dataset_name = dataset_name,
-                                      ignore_threshold = ignore_threshold)
+            #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
+        super().__init__(
+            root = root, 
+            scale_anchors = scale_anchors,
+            input_size = input_size, 
+            strides = strides, 
+            label_path = label_path, 
+            dataset_name = dataset_name,
+            ignore_threshold = ignore_threshold,
+            single_augs = single_augs, 
+            mosaic_augs = mosaic_augs,
+            mosaic_prob = mosaic_prob, 
+            min_box_scale = min_box_scale
+        )
 
         # Check if COCO dataset directory exists, if not download it
         self.coco_paths = {}
@@ -131,34 +132,6 @@ class COCODataset(Dataset, DetectionDatasetBase):
         Gives the number of images in the dataset.
         '''
         return len(self.img_paths)
-    
-    def __getitem__(
-            self, 
-            idx: int
-    ) -> Tuple[Union[Image.Image, torch.Tensor], List[torch.Tensor]]:
-        '''
-        Gets the transformed image and targets for a given index.
-        Returns:
-            img (Image.Image or torch.Tensor): The transformed image at `idx`.
-                                               The exact type of `img` depends 
-                                               on the transforms of the dataset.
-            scale_targs (List[torch.Tensor]): List of encoded target tensors, one per scale of the model.
-                                              Each has shape: (num_anchors, fmap_h, fmap_w, 5 + C)
-        '''
-        img_file = self.img_paths[idx]
-        filename = os.path.basename(img_file)
-        
-        img = Image.open(img_file).convert('RGB')
-        anno_info = self.filename_to_annos[filename]
-
-        if self.transforms is not None:
-            img, anno_info = self.transforms(img, anno_info)
-
-        if self.resize:
-            img, anno_info = self.resize_transforms(img, anno_info)
-        
-        scale_targs = self._encode_yolov3_targets(anno_info)
-        return img, scale_targs
 
     def get_img(self, idx: int) -> Image.Image:
         '''
@@ -213,7 +186,7 @@ class COCODataset(Dataset, DetectionDatasetBase):
                 bbox_tensor[:, :2] += bbox_tensor[:, 2:4] / 2 # Converts XYWH -> CXCYWH
                 bbox_tensor = convert.center_to_corner_format(bbox_tensor) # Converts CXCYWH -> XYXY
 
-                # Change value of filename_to_annos to a suiable format for v2 transforms
+                # Change value of filename_to_annos to a suitable format for v2 transforms
                 filename_to_annos[key] = {
                     'labels': bbox_tensor[:, 4].to(dtype = torch.long),
                     'boxes': BoundingBoxes(data = bbox_tensor[:, :4], format = 'XYXY', 

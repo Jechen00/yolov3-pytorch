@@ -7,9 +7,10 @@ from torch.utils.data import DataLoader
 from torchvision.ops import batched_nms
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Union, Tuple, Literal
 
 from src import postprocess
+from src.utils import convert
 
 
 #####################################
@@ -23,12 +24,12 @@ def bbox_area(bboxes: torch.Tensor) -> torch.Tensor:
     Computes the area of bounding boxes.
     
     Args:
-        bboxes (torch.Tensor): Tensor of shape (..., num_bboxes, 4+),
+        bboxes (torch.Tensor): Tensor of shape (..., 4+),
                                where the last dimension represents bounding boxes in the format:
                                (x_min, y_min, x_max, y_max).
 
     Returns:
-        torch.Tensor: Tensor of shape (..., num_bboxes) containing
+        torch.Tensor: Tensor of shape (..., ) containing
                       the area of each bounding box.
     '''
     
@@ -41,14 +42,14 @@ def calc_ious(
     bboxes1: torch.Tensor, 
     bboxes2: torch.Tensor, 
     elementwise: bool = False,
-    use_giou: bool = False
+    reg_type: Optional[Literal['giou', 'diou', 'ciou']] = None
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     '''
     Computes Intersection over Union (IoU) between two set of bounding boxes,
-    with the option of using a regularization term for Generalized IoU (GIoU).
+    with the option of using a regularization term for Generalized IoU (GIoU) or Complete IoU (CIoU).
     
     The range of IoU is [0, 1].
-    The range of GIoU is [-1, 1].
+    The range of GIoU, DIoU, and CIoU is [-1, 1].
     
     Args:
         bboxes1 (torch.Tensor): Tensor of shape (..., num_bboxes1, 4+)
@@ -59,9 +60,10 @@ def calc_ious(
                                 (x_min, y_min, x_max, y_max) format as the first 4 elements.
         elementwise (bool): Whether to calculate IoUs element-wise (1:1), or pairwise (all combinations).
                             If True, `bboxes1` and `bboxes2` must have the same shape.
-        use_giou (bool): Whether to calculate GIoU alongside IoUs. 
-                         If `use_giou = True`, the GIoU and IoU values are both returned.
-                         If `use_giou = False`, only IoU values are calculated and returned.
+        reg_type (optional, Literal['giou', 'diou', 'ciou']): The type of regularization term to use.
+                                    If not provided, no regularization is used and only IoU is returned.
+                                    When provided, the respective GIoU, DIoU, or CIoU regularizations are used.
+                                    Additionally, the IoU values are returned alongside the regularized values.
         
     Returns:
         ious (torch.Tensor): IoU values. If `elementwise = False`, shape is (..., num_bboxes1, num_bboxes2), 
@@ -69,9 +71,10 @@ def calc_ious(
                       and j-th box in `bboxes2`. If `elementwise = True`, shape is (..., num_bboxes1),
                       where the i-th entry gives the IoU between the i-th boxes of `bboxes1` and` bboxes2`.
                       
-        gious (torch.Tensor): GIoU values. The format of this tensor is the same as `ious`. 
-                              This is only returned along with `ious` if `use_gious = True`.
+        reg_ious (torch.Tensor): GIoU, DIoU, or CIoU values. The format of this tensor is the same as `ious`. 
+                                 This is only returned along with `ious` if `reg_type` is provided.
     '''
+    eps = 1e-7 # Used to prevent divide by zero errors
     
     if elementwise:
         assert bboxes2.shape == bboxes1.shape, (
@@ -89,29 +92,62 @@ def calc_ious(
     inter_br = torch.min(bboxes2[..., 2:4], bboxes1[..., 2:4])
     
     # Intersection width and height -> intersection area
-    # Clamp to 0 avoids negative values and indicates no overlap
-    inter_lengths = (inter_br - inter_ul).clamp(min = 0)
-    inter_areas = inter_lengths[..., 0] * inter_lengths[..., 1]
+    # Clamp to 0 avoid negative values and indicates no overlap
+    inter_wh = (inter_br - inter_ul).clamp(min = 0)
+    inter_areas = inter_wh[..., 0] * inter_wh[..., 1]
     
     # Union areas: area(A) + area(B) - area(intersection)
     union_areas = bbox_area(bboxes2) + bbox_area(bboxes1) - inter_areas
     
-    ious = inter_areas / (union_areas + 1e-7)
+    ious = inter_areas / (union_areas + eps)
     
-    if use_giou:
+    if reg_type is None:
+        return ious
+    
+    else:
         # Upper-left and bottom-right corners of minimum enclosing box
         enclose_ul = torch.min(bboxes1[..., :2], bboxes2[..., :2])
         enclose_br = torch.max(bboxes1[..., 2:4], bboxes2[..., 2:4])
+        enclose_wh = (enclose_br - enclose_ul).clamp(min = 0)
         
-        enclose_lengths = (enclose_br - enclose_ul).clamp(min = 1e-7)
-        enclose_areas = enclose_lengths[..., 0] * enclose_lengths[..., 1]
+        if reg_type == 'giou':
+            enclose_areas = enclose_wh[..., 0] * enclose_wh[..., 1]
+            penalties = [(enclose_areas - union_areas) / (enclose_areas + eps)] # GIoU regularization term
+            
+        elif reg_type in ['diou', 'ciou']:
+            penalties = []
+            # -----------------------------
+            # Center Regularization
+            # -----------------------------
+            bboxes2_center = convert.corner_to_center_format(bboxes2)
+            bboxes1_center = convert.corner_to_center_format(bboxes1)
 
-        giou_penalty = (enclose_areas - union_areas) / (enclose_areas + 1e-7)
-        gious = ious - giou_penalty # GIoU = IoU - |C \ (A U B)| / |C|
-        
-        return ious, gious
-    else:
-        return ious
+            # Squared diagonal of minimum enclosing box
+            c2 = enclose_wh.pow(2).sum(dim = -1)
+
+            # Squared distance between the centers of bboxes1 and bboxes2
+            rho2 = (bboxes1_center[..., :2] - bboxes2_center[..., :2]).pow(2).sum(dim = -1)
+
+            penalties.append(rho2 / c2) # Center distance penalty term
+
+            if reg_type == 'ciou':
+                # -----------------------------
+                # Aspect Ratio Regularization
+                # -----------------------------
+                # Bbox aspect ratios
+                bboxes1_ar = bboxes1_center[..., 2] / (bboxes1_center[..., 3] + eps)
+                bboxes2_ar = bboxes2_center[..., 2] / (bboxes2_center[..., 3] + eps)
+
+                v = 4 / torch.pi**2 * (bboxes1_ar.arctan() - bboxes2_ar.arctan()).pow(2)
+
+                with torch.no_grad():
+                    # When IoU < 0.5, aspect ratio isn't important and aren't penalized
+                    alpha = torch.where(ious < 0.5, 0, v/(1 - ious + v + eps))
+
+                penalties.append(alpha * v) # Aspect ratio penalty term
+
+        reg_ious = ious - torch.stack(penalties, dim = 0).sum(dim = 0)
+        return ious, reg_ious
 
 
 # ------------------------

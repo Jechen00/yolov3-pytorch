@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from typing import Tuple, List, Union, Optional
 
 from src.data_setup import coco_dataset, voc_dataset, transforms
-from src.utils import constants
+from src.utils import constants, misc
 
 
 DATASETS = {
@@ -49,12 +49,14 @@ def yolov3_collate_fn(batch: List[tuple]):
 def get_dataloaders(root: str, 
                     dataset_name: str,
                     batch_size: int, 
-                    scale_anchors: List[torch.Tensor],
                     input_size: Union[int, Tuple[int, int]],
+                    scale_anchors: List[torch.Tensor],
                     strides: List[Union[int, Tuple[int, int]]],
                     ignore_threshold: float = 0.5,
+                    mosaic_prob: float = 0.0,
                     num_workers: int = 0,
-                    max_imgs: Optional[Tuple[int, int]] = (None, None)) -> Tuple[DataLoader, DataLoader]:
+                    max_imgs: Optional[Tuple[int, int]] = (None, None),
+                    min_box_scale: float = 0.01) -> Tuple[DataLoader, DataLoader]:
     '''
     Creates training and validation/testing dataloaders 
     for MS-COCO (`dataset_name = 'coco'`) or Pascal VOC (`dataset_name = 'voc'`).
@@ -71,7 +73,6 @@ def get_dataloaders(root: str,
         batch_size (int): Size used to split the datasets into batches.
         input_size (int or Tuple[int, int]): Input image size (height, width) to resize the images to.
                                              If `int`, resizing is assumed to be square.
-
         scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (height, width) of the anchor in unit of the input size (pixels).
@@ -83,11 +84,15 @@ def get_dataloaders(root: str,
                                   but have an IoU >= ignore_threshold, 
                                   will be marked with an encoded index of `-1` to indicate they should be ignored.
                                   Default value is 0.5. 
-
+        mosaic_prob (float): The probability that an image from the dataset's `__getitem__` function is a mosaic.
+                             This is only used for the training dataset. Default is 0.0.
         num_workers (int): Number of workers to use for multiprocessing. Default is 0.
-        max_imgs (optional, Tuple[int, int]): The maximum number of images to include for 
-                                              the training dataset (`max_imgs[0]`) and validation dataset (`max_imgs[1]`).
-                                              If `max_imgs[i] = None`, no maximum count is applied.
+        max_imgs (optional, Union[int, Tuple[int, int]]): The maximum number of images to include for 
+                                                          the training dataset (`max_imgs[0]`) and validation dataset (`max_imgs[1]`).
+                                                          If `max_imgs[i] = None`, no maximum count is applied.
+        min_box_scale (float): The Minimum scale of box width and height relative to the image dimensions.
+                               Boxes smaller than this ratio in either dimension are discarded.
+                               Default is 0.01 to represent 1% of the image width and height.
 
     Returns:
         train_loader (DataLoader): Dataloader for the training set.
@@ -97,26 +102,32 @@ def get_dataloaders(root: str,
         f'`dataset` must be in {list(DATASETS.keys())}'
     )
     dataset_class = DATASETS[dataset_name]
+    max_imgs = misc.make_tuple(max_imgs)
 
-    # Resizing and pixel rescaling will be handled inside the dataset.
-    train_transforms = transforms.get_transforms(resize = False, to_float = False, train = True)
-    test_transforms = transforms.get_transforms(resize = False, to_float = False, train = False)
+    # Resizing and pixel rescaling for single images will be handled inside the dataset.
+    train_single_augs = transforms.get_single_transforms(train = True, aug_only = True)
+    train_mosaic_augs = transforms.get_mosaic_transforms(aug_only = True)
 
+    test_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
+    
     common_kwargs = {
         'root': root,
         'scale_anchors': scale_anchors,
         'input_size': input_size,
         'strides': strides,
-        'resize': True,
-        'ignore_threshold': ignore_threshold
+        'ignore_threshold': ignore_threshold,
+        'min_box_scale': min_box_scale
     }
     train_dataset = dataset_class(train = True, 
-                                  transforms = train_transforms,
+                                  single_augs = train_single_augs,
+                                  mosaic_augs = train_mosaic_augs,
+                                  mosaic_prob = mosaic_prob,
                                   max_imgs = max_imgs[0],
                                   **common_kwargs)
 
     test_dataset = dataset_class(train = False, 
-                                 transforms = test_transforms,
+                                 single_augs = test_single_augs,
+                                 mosaic_prob = 0.0,
                                  max_imgs = max_imgs[1],
                                  **common_kwargs)
 

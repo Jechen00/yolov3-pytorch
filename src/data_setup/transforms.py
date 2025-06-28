@@ -3,8 +3,10 @@
 #####################################
 import torch
 from torchvision.transforms import v2
+import torchvision.transforms.functional as F
 
-from typing import Tuple, Union
+from PIL import Image
+from typing import Tuple, Union, Optional
 
 from src.utils import misc
 
@@ -12,68 +14,182 @@ from src.utils import misc
 #####################################
 # Functions
 #####################################
-def get_transforms(train: bool = True,
-                   resize: bool = True,
-                   to_float: bool = True,
-                   size: Union[int, Tuple[int, int]] = (416, 416)) -> v2.Compose:
+def get_single_transforms(train: bool = True,
+                   aug_only: bool = False,
+                   size: Union[int, Tuple[int, int]] = (416, 416)) -> Optional[v2.Compose]:
     '''
-    Creates a torchvision transform pipeline for preprocessing images 
+    Creates a torchvision transform pipeline for preprocessing a single image 
     during training or validation/testing. If performing multiscale training, 
-    its recommended to set `resize = False` and `to_float = False`.
+    its recommended to set `aug_only=True` for the training transforms.
 
     Args:
         train (bool): If True, includes data augmentation transforms such as random HSV adjustments
                       and random affine transformations (scaling and translation). If False, only basic
-                      ToImage and optionally resizing transforms are applied.
+                      ToImage and resizing transforms are applied.
                       Default is True.
-        resize (bool): Whether to include resizing in transforms. Default is True.
-        to_float (bool): Whether to include transforming to float32.
-                         If `to_float = True`, pixels will also be rescaled to [0, 1]. Default is True.
+        aug_only (bool): Whether to only return the data augmentation transforms. 
+                         If `aug_only=True` and `train=False`, this function returns `None`. \
+                         Default is False.
         size (int or Tuple[int, int]): The size to resize the input image into. 
                                        If type is `int`, it is assumed that resize will be square.
                                        This is only used if `resize = True`. Default is (416, 416).
-
-        Note: If `resize = False` and `to_float = False`, the transforms will not include `v2.ToImage`.
               
     Returns:
         v2.Compose: The transform pipeline to be used in datasets.
     '''
-    transforms = []
-    if resize or to_float:
-        transforms.append(v2.ToImage()) # Convert to tensor (dtype is usually uint8)
-
-    if resize:
-        size = misc.make_tuple(size)
-        transforms.append(v2.Resize(size = size))
-
-    if to_float:
-        transforms.append(v2.ToDtype(torch.float32, scale = True)) # Rescales to [0, 1]
-
     if train:
         transforms = [
+            v2.ColorJitter(
+                brightness = 0.6,
+                saturation = 0.4,
+                hue = 0.03
+            ),
+            v2.RandomGrayscale(p = 0.05),
             v2.RandomIoUCrop(
                 min_scale = 0.5,
-                min_aspect_ratio = 0.5,
-                max_aspect_ratio = 2.0,
-                sampler_options = [0.1, 0.3, 0.5, 0.7, 0.9, 1.1],
+                min_aspect_ratio = 0.75,
+                max_aspect_ratio = 1.33,
+                sampler_options = [0.4, 0.5, 0.7, 0.9, 1.1, 1.2],
                 trials = 20
             ),
             v2.RandomHorizontalFlip(p = 0.5),
             v2.RandomAffine(
-                degrees = 5,
-                scale = (0.8, 1.2),
-                translate = (0.1, 0.1),
+                degrees = 8,
+                shear = 5,
+                translate = (0.08, 0.08),
+                fill = 114
             ),
-            v2.RandomPerspective(p = 0.2, distortion_scale = 0.08, fill = 114),
-            v2.ColorJitter(
-                brightness = 0.25,
-                contrast = 0.15,
-                saturation = 0.25,
-                hue = 0.1  
-            ),
-            v2.RandomGrayscale(p = 0.1),
-            v2.RandomAdjustSharpness(p = 0.2, sharpness_factor = 2)
-        ] + transforms
+            v2.RandomApply([v2.GaussianBlur(kernel_size = 3, sigma = (0.1, 1.5))], p = 0.1)
+        ]
+    else:
+        transforms = []
+
+    if not aug_only:
+        transforms += [
+            v2.ToImage(),
+            LetterBox(size = size, fill = 114),
+            v2.ToDtype(torch.float32, scale = True)
+        ]
 
     compose_transforms = v2.Compose(transforms) if transforms else None
     return compose_transforms
+
+def get_mosaic_transforms(aug_only: bool = False) -> Optional[v2.Compose]:
+    '''
+    Creates a torchvision transform pipeline for preprocessing a mosaic image during training.
+    This includes data augmentations and ToImage transforms. 
+    It is also assumed that any resizing is performed during the creation of the mosaic.
+
+    Args:
+        aug_only (bool): Whether to only return the data augmentation transforms. Default is False.
+              
+    Returns:
+        v2.Compose: The transform pipeline to be used in datasets.
+    '''
+    transforms = [
+        v2.ColorJitter(
+            brightness = 0.6,
+            saturation = 0.4,
+            hue = 0.03
+        ),
+        v2.RandomGrayscale(p = 0.05),
+        v2.RandomHorizontalFlip(p = 0.5),
+        v2.RandomApply([v2.GaussianBlur(kernel_size = 3, sigma = (0.1, 1.5))], p = 0.1)
+    ]
+
+    if not aug_only:
+        transforms += [
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale = True)
+        ]
+
+    compose_transforms = v2.Compose(transforms) if transforms else None
+    return compose_transforms
+
+def remove_letterbox_pad(
+    img: Union[torch.Tensor, Image.Image], 
+    bboxes: torch.Tensor, 
+    orig_size: Tuple[int, int]
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    '''
+    img (torch.Tensor or Image.Image): If a tensor, shape is (..., height, width).
+    bboxes shape: (num_bboxes, 4) w/ last dim in XYXY
+    orig_size: (height, width)
+    '''
+    if isinstance(img, torch.Tensor):
+        lb_h, lb_w = img.shape[-2:]
+    elif isinstance(img, Image.Image):
+        lb_w, lb_h = img.size
+    else:
+        raise TypeError('`img` must be a Tensor or PIL Image')
+    
+    lb_scale = min(lb_h / orig_size[0], lb_w / orig_size[1])
+    scaled_h = int(orig_size[0] * lb_scale)
+    scaled_w = int(orig_size[1] * lb_scale)
+    
+    pad_h = lb_h - scaled_h
+    pad_w = lb_w - scaled_w
+    
+    pad_l = pad_w // 2
+    pad_t = pad_h // 2
+
+    # Remove padding
+    pad_rm_img = F.center_crop(img, output_size = (scaled_h, scaled_w))
+    
+    # Shift bboxes to new coordinates
+    pad_rm_bboxes = bboxes.clone()
+    pad_rm_bboxes[:, ::2] = (pad_rm_bboxes[:, ::2] - pad_l).clamp(0, 0.995 * scaled_w)
+    pad_rm_bboxes[:, 1::2] = (pad_rm_bboxes[:, 1::2] - pad_t).clamp(0, 0.995 * scaled_h)
+    
+    return pad_rm_img, pad_rm_bboxes
+
+
+#####################################
+# Classes
+#####################################
+class LetterBox():
+    def __init__(self, 
+                 size: Union[int, Tuple[int, int]], 
+                 fill: Union[int, Tuple[int, int, int]] = 0):
+        self.size = misc.make_tuple(size) # Height, width
+        self.fill = fill
+        
+        self.resize_transform = v2.Resize(size = (0, 0))
+        self.pad_transform = v2.Pad(padding = 0, fill = self.fill)
+        
+    def __call__(self, 
+                 img: Union[Image.Image, torch.Tensor], 
+                 anno_info: Optional[dict] = None) -> Tuple[Union[Image.Image, torch.Tensor], dict]:
+        
+        if isinstance(img, torch.Tensor):
+            orig_h, orig_w = img.shape[-2:]
+        elif isinstance(img, Image.Image):
+            orig_w, orig_h = img.size
+        else:
+            raise TypeError('`img` must be a Tensor or PIL Image')
+
+        # Resizing scale
+        lb_scale = min(self.size[1] / orig_w, self.size[0] / orig_h)
+        scaled_w = int(orig_w * lb_scale)
+        scaled_h = int(orig_h * lb_scale)
+
+        # Padding after resize
+        pad_w = self.size[1] - scaled_w
+        pad_h = self.size[0] - scaled_h
+        pad_l = pad_w // 2
+        pad_r = pad_w - pad_l
+        pad_t = pad_h // 2
+        pad_b = pad_h - pad_t
+        
+        # Update transforms
+        self.resize_transform.size = (scaled_h, scaled_w)
+        self.pad_transform.padding = (pad_l, pad_t, pad_r, pad_b)
+        
+        # Resize -> Pad
+        img, anno_info = self.resize_transform(img, anno_info)
+        img, anno_info = self.pad_transform(img, anno_info)
+        
+        if anno_info is not None:
+            return img, anno_info
+        else:
+            return img

@@ -45,6 +45,9 @@ LOSS_NAMES = {
 }
 EVAL_NAMES = {
     'map': 'mAP',
+    'map_large': 'mAP (L)',
+    'map_medium': 'mAP (M)',
+    'map_small': 'mAP (S)',
     'map_50': 'mAP@[IoU=0.50]',
     'map_75': 'mAP@[IoU=0.75]'
 }

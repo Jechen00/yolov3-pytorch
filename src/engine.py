@@ -227,6 +227,11 @@ def train(
         # -------------------------
         train_start = time.time()
 
+        # Disable mosaic for the last 10% of epochs
+        # This lets the model fine-tune to more realistic, single images
+        if (epoch >= 0.9 * te_cfgs.num_epochs):
+            train_loader.dataset.mosaic_prob = 0.0
+
         # Compute average losses over batches
         train_avgs = yolov3_train_step(
             model = model, 
@@ -265,11 +270,12 @@ def train(
         val_start = time.time()
 
         # Evaluate metrics (mAP) at specified intervals and at the final epoch
-        should_eval = (
-            (te_cfgs.eval_interval is not None) and
-            (epoch > te_cfgs.eval_start_epoch) and
-            (epoch % te_cfgs.eval_interval == 0) or (epoch == te_cfgs.num_epochs - 1)
-        )
+        should_eval = False
+        if epoch == (te_cfgs.num_epochs - 1):
+            should_eval = True
+        elif (te_cfgs.eval_interval is not None) and (epoch >= te_cfgs.eval_start_epoch):
+            if (epoch - te_cfgs.eval_start_epoch) % te_cfgs.eval_interval == 0:
+                should_eval = True
 
         # Compute average losses over batches and eval metrics
             # eval_res is None if should_eval is False
@@ -353,13 +359,14 @@ class TrainEvalConfigs():
                                                                    Elements can be ints (assumed square) or (H, W) tuples.
                                                                    If `int`, it is assumed that the input size is square.
                                                                    Example: [320, (416, 416), 608]. Default is None.
-        eval_interval (optional, int): Interval (in epochs) to compute evaluation metrics on the validation dataset.
-                                       If None, evaluation metrics are never computed. Default is None.
+        eval_interval (optional, int): Interval (in epochs) to compute evaluation metrics on the validation dataset
+                                       after the first computation at `eval_start_epoch`.
+                                       If None, evaluation metrics are never computed.
                                        If provided, the following are also required: 
-                                       `scale_anchors`, `strides`, `obj_threshold`, `nms_threshold`.
+                                       `scale_anchors`, `strides`, `obj_threshold`, `nms_threshold`. Default is None.
         eval_start_epoch (int): The epoch in which the evaluation computation periods start. 
-                                This is only used if `eval_interval` is provided.
-                                Default is -1, which means evaluations happen at the start of training.
+                                This is must be greater than 0 and is only used if `eval_interval` is provided.
+                                Default is 0, which means evaluations happen at the start of training.
         scale_anchors (optional, List[torch.tensor]): List of anchor tensors for each output scale of the model.
                                                       Each element has shape: (num_anchors, 2), where the last dimension gives 
                                                       the (width, height) of the anchor in units of the input size (pixels). 
@@ -383,7 +390,7 @@ class TrainEvalConfigs():
     input_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None
     
     eval_interval: Optional[int] = None
-    eval_start_epoch: int = -1
+    eval_start_epoch: int = 0
     scale_anchors: Optional[List[torch.Tensor]] = None
     strides: Optional[List[Tuple[int, int]]] = None
     obj_threshold: Optional[float] = None
@@ -400,6 +407,7 @@ class TrainEvalConfigs():
         # Set a default value for map_thresholds
         if self.eval_interval is not None:
             assert self.eval_interval > 0, 'The interval (in epochs) for evaluation computations, `eval_interval`, must be at least 1 if provided.'
+            assert self.eval_start_epoch >= 0, '`eval_start_epoch`, cannot be negative.'
             for eval_attr in ['scale_anchors', 'strides', 'obj_threshold', 'nms_threshold']:
                 assert getattr(self, eval_attr) is not None, f'If `eval_interval` is provided for evaluations, `{eval_attr}` must not be None'
             self.map_thresholds = [0.5] if self.map_thresholds is None else self.map_thresholds

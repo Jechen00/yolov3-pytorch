@@ -13,7 +13,6 @@ import xml.etree.ElementTree as ET
 from typing import Optional, List, Union, Callable, Tuple
 
 from src.utils.constants import BOLD_START, BOLD_END
-from src.utils import convert
 from src.data_setup.dataset_utils import DetectionDatasetBase
 
 
@@ -47,7 +46,7 @@ VOC_DATA_URLS = {
 #####################################
 # VOC Dataset Class
 #####################################
-class VOCDataset(Dataset, DetectionDatasetBase):
+class VOCDataset(DetectionDatasetBase):
     '''
     The training set combines the trainval data from  Pascal VOC 2007 and 2012. 
     The validation/test set is the test data from Pascal VOC 2007.
@@ -60,14 +59,13 @@ class VOCDataset(Dataset, DetectionDatasetBase):
                  input_size: Union[int, Tuple[int, int]],
                  strides: List[Union[int, Tuple[int, int]]],
                  train: bool = True, 
-                 transforms: Callable = None,
-                 resize: bool = True,
+                 single_augs: Optional[Callable] = None,
+                 mosaic_augs: Optional[Callable] = None,
+                 mosaic_prob: float = 0.0,
                  ignore_threshold: float = 0.5,
+                 min_box_scale: float = 0.01,
                  max_imgs: Optional[int] = None):
-        Dataset.__init__(self)
         self.train = train
-        self.transforms = transforms
-        self.resize = resize
         self.max_imgs = max_imgs
         
         if train:
@@ -81,11 +79,20 @@ class VOCDataset(Dataset, DetectionDatasetBase):
         label_path = os.path.join(root, 'voc.names') # Path to VOC class names
 
         # Initialize base detection dataset attributes 
-            #  (scale_anchors, fmap_sizes, classes, resize_transforms, etc.)
-        DetectionDatasetBase.__init__(self, root = root, scale_anchors = scale_anchors,
-                                      input_size = input_size, strides = strides, 
-                                      label_path = label_path, dataset_name = dataset_name,
-                                      ignore_threshold = ignore_threshold)
+            #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
+        super().__init__(
+            root = root, 
+            scale_anchors = scale_anchors,
+            input_size = input_size, 
+            strides = strides, 
+            label_path = label_path, 
+            dataset_name = dataset_name,
+            ignore_threshold = ignore_threshold,
+            single_augs = single_augs, 
+            mosaic_augs = mosaic_augs,
+            mosaic_prob = mosaic_prob, 
+            min_box_scale = min_box_scale
+        )
         
         self.voc_paths, self.img_paths, self.anno_paths = [], [], []
         for key in data_keys:
@@ -132,31 +139,6 @@ class VOCDataset(Dataset, DetectionDatasetBase):
         Gives the number of images in the dataset.
         '''
         return len(self.img_paths)
-    
-    def __getitem__(
-            self, 
-            idx: int
-    ) -> Tuple[Union[Image.Image, torch.Tensor], List[torch.Tensor]]:
-        '''
-        Gets the transformed image and targets for a given index.
-        Returns:
-            img (Image.Image or torch.Tensor): The transformed image at `idx`.
-                                               The exact type of `img` depends 
-                                               on the transforms of the dataset.
-            scale_targs (List[torch.Tensor]): List of encoded target tensors, one per scale of the model.
-                                              Each has shape: (num_anchors, fmap_h, fmap_w, 5 + C)
-        '''
-        img = self.get_img(idx)
-        anno_info = self.get_anno_info(idx)
-        
-        if self.transforms is not None:
-            img, anno_info = self.transforms(img, anno_info)
-            
-        if self.resize:
-            img, anno_info = self.resize_transforms(img, anno_info)
-        
-        scale_targs = self._encode_yolov3_targets(anno_info)
-        return img, scale_targs
     
     def get_img(self, idx: int) -> Image.Image:
         '''

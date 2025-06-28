@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Literal
 
 from src import postprocess, evaluate
 
@@ -15,20 +15,21 @@ from src import postprocess, evaluate
 #####################################
 class YOLOv3Loss(nn.Module):
     def __init__(self,
-                 lambda_coord: float = 5.0, 
+                 lambda_coord: float = 1.0, 
                  lambda_class: float = 1.0, 
                  lambda_conf: float = 1.0,
                  alpha: float = 0.25,
                  gamma: float = 2.0,
-                 use_giou_coord: bool = False,
+                 use_iou_coord: bool = False,
                  softmax_probs: bool = False,
+                 iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
                  scale_weights: Optional[List[float]] = None,
                  scale_anchors: Optional[List[torch.Tensor]] = None,
                  strides = None):
         super().__init__()
-        if use_giou_coord:
+        if use_iou_coord:
             assert (scale_anchors is not None) and (strides is not None), (
-                'If `use_giou_coord = True`, `scale_anchors` and `strides` must be provided.'
+                'If `use_iou_coord = True`, `scale_anchors` and `strides` must be provided.'
             )
 
         self.lambdas = {
@@ -39,8 +40,9 @@ class YOLOv3Loss(nn.Module):
         self.loss_keys = list(self.lambdas.keys()) + ['total']
 
         self.alpha, self.gamma = alpha, gamma
-        self.use_giou_coord = use_giou_coord
+        self.use_iou_coord = use_iou_coord
         self.softmax_probs = softmax_probs
+        self.iou_coord_reg = iou_coord_reg
         self.scale_anchors = scale_anchors
         self.strides = strides
 
@@ -119,14 +121,12 @@ class YOLOv3Loss(nn.Module):
                 preds = logits.clone()
                 preds[..., :2] = torch.sigmoid(preds[..., :2])
 
-                if not self.use_giou_coord:
-                    coord_mse_losses = F.mse_loss(
+                if not self.use_iou_coord:
+                    loss_comps['coord'] = F.mse_loss(
                         input = preds[obj_mask][:, :4],
                         target = targs_obj[:, :4],
-                        reduction = 'none'
+                        reduction = 'sum'
                     )
-                    
-                    loss_comps['coord'] = coord_mse_losses.sum()
 
                 else:
                     preds_bboxes = postprocess.decode_yolov3_bboxes(
@@ -146,10 +146,10 @@ class YOLOv3Loss(nn.Module):
                         return_units = 'pixel'
                     )
                     
-                    _, obj_gious = evaluate.calc_ious(bboxes1 = preds_bboxes, bboxes2 = targs_bboxes, 
-                                                      elementwise = True, use_giou = True)
+                    _, reg_ious = evaluate.calc_ious(bboxes1 = preds_bboxes, bboxes2 = targs_bboxes, 
+                                                     elementwise = True, reg_type = self.iou_coord_reg)
                     
-                    loss_comps['coord'] = (1 - obj_gious).sum()
+                    loss_comps['coord'] = (1 - reg_ious).sum()
 
             #----------------------------
             # Full YOLOv3 Loss
