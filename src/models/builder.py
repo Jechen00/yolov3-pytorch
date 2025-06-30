@@ -14,7 +14,7 @@ from src.utils import yolo_loader, constants
 #####################################
 # Functions
 #####################################
-def make_module(cfg_dict: str) -> Tuple[nn.Module, Optional[dict]]:
+def make_module(cfg_dict: dict) -> Tuple[nn.Module, Optional[dict]]:
     module_name = cfg_dict['name']
     scale_info = None
     
@@ -149,6 +149,7 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
         layer_outputs (list[torch.Tensor]): List of layer outputs from the backbone of a YOLOv3 model.
         '''
         
+        layer_outputs = list(layer_outputs)
         Y = layer_outputs[-1]
         scale_idx = 0
         scale_outputs = []

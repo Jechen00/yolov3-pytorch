@@ -56,8 +56,8 @@ class VOCDataset(DetectionDatasetBase):
     def __init__(self, 
                  root: str, 
                  scale_anchors: List[torch.Tensor],
-                 input_size: Union[int, Tuple[int, int]],
                  strides: List[Union[int, Tuple[int, int]]],
+                 default_input_size: Union[int, Tuple[int, int]],
                  train: bool = True, 
                  single_augs: Optional[Callable] = None,
                  mosaic_augs: Optional[Callable] = None,
@@ -71,22 +71,22 @@ class VOCDataset(DetectionDatasetBase):
         if train:
             data_keys = ['trainval2007', 'trainval2012']
             id_txt = 'trainval.txt'
-            dataset_name = 'Pascal VOC 2012+2007'
+            display_name = 'Pascal VOC 2012+2007'
         else:
             data_keys = ['test2007']
             id_txt = 'test.txt'
-            dataset_name = 'Pascal VOC 2007 Test'
+            display_name = 'Pascal VOC 2007 Test'
         label_path = os.path.join(root, 'voc.names') # Path to VOC class names
 
         # Initialize base detection dataset attributes 
             #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
         super().__init__(
             root = root, 
-            scale_anchors = scale_anchors,
-            input_size = input_size, 
-            strides = strides, 
             label_path = label_path, 
-            dataset_name = dataset_name,
+            display_name = display_name,
+            scale_anchors = scale_anchors,
+            strides = strides, 
+            default_input_size = default_input_size,
             ignore_threshold = ignore_threshold,
             single_augs = single_augs, 
             mosaic_augs = mosaic_augs,

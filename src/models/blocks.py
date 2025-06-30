@@ -19,8 +19,7 @@ class ConvBNAct(nn.Module):
         kernel_size (int): Kernel size for the conv layer.
         stride (int): Stride for the conv layer. Default is 1.
         padding (int): Padding for the conv layer. Default is 0.
-        include_bn (bool): Whether to include batch norm after each conv layer.
-                           Note that the original paper does not use batch norms. Default is False.
+        include_bn (bool): Whether to include batch norm after each conv layer. Default is False.
         activation (optional, nn.Module): Activation function applied after each conv (and batch norm if included).
                                           Default is None.
     '''

@@ -134,7 +134,7 @@ class YOLOv3Loss(nn.Module):
                         anchors = self.scale_anchors[i],
                         stride = self.strides[i],
                         mask = obj_mask, 
-                        return_format = 'corner',
+                        return_format = 'xyxy',
                         return_units = 'pixel'
                     )
                     targs_bboxes = postprocess.decode_yolov3_bboxes(
@@ -142,7 +142,7 @@ class YOLOv3Loss(nn.Module):
                         anchors = self.scale_anchors[i],
                         stride = self.strides[i],
                         mask = obj_mask, 
-                        return_format = 'corner',
+                        return_format = 'xyxy',
                         return_units = 'pixel'
                     )
                     

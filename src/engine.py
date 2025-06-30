@@ -11,11 +11,12 @@ from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 import os
 import time
-import random
 from dataclasses import dataclass, field
 from typing import List, Optional, Union, Dict, Tuple, Any
 
 from src import postprocess, evaluate
+from src.data_setup.dataloader_utils import DataLoaderBuilder
+from src.data_setup.dataset_utils import DetectionDatasetBase
 from src.utils import misc
 from src.utils.constants import BOLD_START, BOLD_END, LOSS_NAMES, EVAL_NAMES
 
@@ -29,17 +30,15 @@ def yolov3_train_step(
     loss_fn: nn.Module,
     optimizer: Optimizer,
     accum_steps: int = 1,
-    new_size_interval: Optional[int] = None,
-    input_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None,
     device: Union[torch.device, str] = 'cpu'
 ) -> Dict[str, float]:
-    # Note: Inputs (e.g. input_sizes, new_size_interval) should have been validated externally.
-
     num_samps = len(dataloader.dataset)
     loss_sums = {key: 0.0 for key in loss_fn.loss_keys}
     
     model.train()
     for i, (imgs, scale_targs) in enumerate(dataloader):
+        print(f'BATCH {i}: IMAGE SHAPE: {imgs.shape}')
+        print(f'BATCH {i}: TARGET SHAPES: {[targs.shape for targs in scale_targs]}')
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
         batch_size = imgs.shape[0]
@@ -54,15 +53,10 @@ def yolov3_train_step(
             loss_sums[key] += loss_dict[key].detach() * batch_size
 
         # Used to simulate a larger batch_size
-        batch_idx = i + 1
-        if (batch_idx % accum_steps == 0) or (batch_idx == len(dataloader)):
+        num_batches = i + 1
+        if (num_batches % accum_steps == 0) or (num_batches == len(dataloader)):
             optimizer.step()
             optimizer.zero_grad()
-
-        # Change input size for multiscale training
-        if (new_size_interval is not None) and (batch_idx % new_size_interval == 0):
-            new_size = random.choice(input_sizes)
-            dataloader.dataset.set_input_size(new_size)
 
     return {key: loss_sums[key].item() / num_samps for key in loss_sums}
 
@@ -155,8 +149,8 @@ def yolov3_val_step(
     
 def train(
     model: nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
+    train_builder: DataLoaderBuilder,
+    val_builder: DataLoaderBuilder,
     loss_fn: nn.Module,
     optimizer: Optimizer,
     te_cfgs: TrainEvalConfigs,
@@ -178,6 +172,16 @@ def train(
     # -------------------------
     # Setup & Initialization
     # -------------------------
+    assert hasattr(train_builder.dataset, 'mosaic_prob'), (
+        'The dataset in `train_builder` must have a `mosaic_prob` attribute to support disabling mosaic augmentations.'
+    )
+    assert hasattr(val_builder.dataset, 'mosaic_prob'), (
+        'The dataset in `val_builder` must have a `mosaic_prob` attribute to support disabling mosaic augmentations.'
+    )
+
+    train_loader = train_builder.build()
+    val_loader = val_builder.build()
+
     log_divider = '-' * 114
     epoch_divider = '=' * 114
     start_logs = [] # Log messages to print prior to training/evaluation
@@ -227,10 +231,16 @@ def train(
         # -------------------------
         train_start = time.time()
 
-        # Disable mosaic for the last 10% of epochs
+        # Disable mosaic for the last 20% of epochs
         # This lets the model fine-tune to more realistic, single images
-        if (epoch >= 0.9 * te_cfgs.num_epochs):
-            train_loader.dataset.mosaic_prob = 0.0
+        if (epoch == int(0.8 * te_cfgs.num_epochs)) and (train_builder.dataset.mosaic_prob > 0):
+            train_builder.dataset.mosaic_prob = 0 # Set mosaic_prob to 0 in the main dataset
+
+            if train_loader.persistent_workers:
+                # If persistent_workers = True, rebuild the dataloader
+                # This ensures each worker uses the updated mosaic_prob prob attribute of the dataset
+                train_loader = train_builder.build()
+            print(f'{BOLD_START}[NOTE]{BOLD_END} Mosaic augmentation has been disabled from this point forward.')
 
         # Compute average losses over batches
         train_avgs = yolov3_train_step(
@@ -239,8 +249,6 @@ def train(
             loss_fn = loss_fn, 
             optimizer = optimizer,
             accum_steps = te_cfgs.accum_steps, 
-            new_size_interval = te_cfgs.new_size_interval,
-            input_sizes = te_cfgs.input_sizes, 
             device = device
         )
 
@@ -352,13 +360,6 @@ class TrainEvalConfigs():
                            If `accum_steps > 1`, gradients are accumulated over multiple batches,
                            simulating a larger batch size. Default is 1.
                            See: https://lightning.ai/blog/gradient-accumulation/
-        new_size_interval (optional, int): Interval (in batches) to change input image size for multiscale training.
-                                           If None, multiscale training is disabled. Default is None.
-                                           If provided, the following are also required: `input_sizes`.
-        input_sizes (optional, List[Union[int, Tuple[int, int]]]): List of input sizes to use during multiscale training.
-                                                                   Elements can be ints (assumed square) or (H, W) tuples.
-                                                                   If `int`, it is assumed that the input size is square.
-                                                                   Example: [320, (416, 416), 608]. Default is None.
         eval_interval (optional, int): Interval (in epochs) to compute evaluation metrics on the validation dataset
                                        after the first computation at `eval_start_epoch`.
                                        If None, evaluation metrics are never computed.
@@ -384,10 +385,7 @@ class TrainEvalConfigs():
                                      `box_format='xyxy'` and `iou_thresholds=map_thresholds`.
     '''
     num_epochs: int
-
     accum_steps: int = 1
-    new_size_interval: Optional[int] = None
-    input_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None
     
     eval_interval: Optional[int] = None
     eval_start_epoch: int = 0
@@ -400,9 +398,6 @@ class TrainEvalConfigs():
 
     def __post_init__(self):
         assert self.accum_steps > 0, 'Number of accumulation steps, `accum_steps`, must be at least 1'
-
-        if self.new_size_interval is not None:
-            assert self.input_sizes is not None, 'If `new_size_interval` is provided for multiscale training, `input_sizes` must not be None.'
 
         # Set a default value for map_thresholds
         if self.eval_interval is not None:

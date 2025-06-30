@@ -7,20 +7,20 @@ import torch
 #####################################
 # Functions
 #####################################
-def corner_to_center_format(bboxes):
+def xyxy_to_cxcywh(bboxes):
     '''
-    Converts bbox coordinates from corner (x_min, y_min, x_max, y_max) format
-    to center (x_center, y_center, width, height) format.
+    Converts bbox coordinates from (x_min, y_min, x_max, y_max) format
+    to (x_center, y_center, width, height) format.
 
     In PyTorch BoundingBoxes convention: XYXY -> CXCYWH
 
     Args:
-        bboxes: Bbox coordinates in corner format.
+        bboxes: Bbox coordinates in XYXY format.
                 Shape is (..., 4+), where the first four elements of the last dimension
                 represent (x_min, y_min, x_max, y_max).
 
     Returns:
-        torch.Tensor: The bbox coordinates converted to center format.
+        torch.Tensor: The bbox coordinates converted to CXCYWH format.
                       The entries after the first four elements of the last dimension 
                       are preserved and appended unchanged.
                       Shape is (..., 4+).
@@ -35,23 +35,23 @@ def corner_to_center_format(bboxes):
     width = x_max - x_min
     height = y_max - y_min
     
-    center_bboxes = torch.stack([x_center, y_center, width, height], dim = -1)
-    return torch.concat([center_bboxes, bboxes[..., 4:]], dim = -1)
+    bboxes_cxcywh = torch.stack([x_center, y_center, width, height], dim = -1)
+    return torch.concat([bboxes_cxcywh, bboxes[..., 4:]], dim = -1)
 
-def center_to_corner_format(bboxes):
+def cxcywh_to_xyxy(bboxes):
     '''
-    Converts bbox coordinates from center (x_center, y_center, width, height) format
-    to corner (x_min, y_min, x_max, y_max) format.
+    Converts bbox coordinates from (x_center, y_center, width, height) format
+    to (x_min, y_min, x_max, y_max) format.
 
     In PyTorch BoundingBoxes convention: CXCYWH -> XYXY
 
     Args:
-        bboxes: Bbox coordinates in center format.
+        bboxes: Bbox coordinates in CXCYWH format.
                 Shape is (..., 4+), where the first four elements of the last dimension
                 represent (x_center, y_center, width, height).
 
     Returns:
-        torch.Tensor: The bbox coordinates converted to corner format.
+        torch.Tensor: The bbox coordinates converted to XYXY format.
                       The entries after the first four elements of the last dimension 
                       are preserved and appended unchanged.
                       Shape is (..., 4+).
@@ -66,5 +66,5 @@ def center_to_corner_format(bboxes):
     x_max = x_center + width / 2
     y_max = y_center + height / 2
     
-    corner_bboxes = torch.stack([x_min, y_min, x_max, y_max], dim = -1)
-    return torch.concat([corner_bboxes, bboxes[..., 4:]], dim = -1)
+    bboxes_xyxy = torch.stack([x_min, y_min, x_max, y_max], dim = -1)
+    return torch.concat([bboxes_xyxy, bboxes[..., 4:]], dim = -1)

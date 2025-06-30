@@ -119,14 +119,14 @@ def calc_ious(
             # -----------------------------
             # Center Regularization
             # -----------------------------
-            bboxes2_center = convert.corner_to_center_format(bboxes2)
-            bboxes1_center = convert.corner_to_center_format(bboxes1)
+            bboxes2_cxcywh = convert.xyxy_to_cxcywh(bboxes2)
+            bboxes1_cxcywh = convert.xyxy_to_cxcywh(bboxes1)
 
             # Squared diagonal of minimum enclosing box
             c2 = enclose_wh.pow(2).sum(dim = -1)
 
             # Squared distance between the centers of bboxes1 and bboxes2
-            rho2 = (bboxes1_center[..., :2] - bboxes2_center[..., :2]).pow(2).sum(dim = -1)
+            rho2 = (bboxes1_cxcywh[..., :2] - bboxes2_cxcywh[..., :2]).pow(2).sum(dim = -1)
 
             penalties.append(rho2 / c2) # Center distance penalty term
 
@@ -135,8 +135,8 @@ def calc_ious(
                 # Aspect Ratio Regularization
                 # -----------------------------
                 # Bbox aspect ratios
-                bboxes1_ar = bboxes1_center[..., 2] / (bboxes1_center[..., 3] + eps)
-                bboxes2_ar = bboxes2_center[..., 2] / (bboxes2_center[..., 3] + eps)
+                bboxes1_ar = bboxes1_cxcywh[..., 2] / (bboxes1_cxcywh[..., 3] + eps)
+                bboxes2_ar = bboxes2_cxcywh[..., 2] / (bboxes2_cxcywh[..., 3] + eps)
 
                 v = 4 / torch.pi**2 * (bboxes1_ar.arctan() - bboxes2_ar.arctan()).pow(2)
 
@@ -293,7 +293,7 @@ def predict_yolov3_from_logits(scale_logits: List[torch.Tensor],
             bboxes = preds[..., :4], 
             anchors = anchors, 
             stride = stride,
-            return_format = 'corner',
+            return_format = 'xyxy',
             return_units = 'pixel'
         )    
 
@@ -324,7 +324,7 @@ def predict_yolov3_from_logits(scale_logits: List[torch.Tensor],
                                 idxs = cls_labels, 
                                 iou_threshold = nms_threshold)
 
-        preds_res['boxes'] = bboxes[keep_idxs] # Format: corner (XYXY), Units: pixel
+        preds_res['boxes'] = bboxes[keep_idxs] # Format: XYXY, Units: pixel
         preds_res['labels'] = cls_labels[keep_idxs]
         preds_res['scores'] = cls_scores[keep_idxs]
         preds_dicts.append(preds_res)

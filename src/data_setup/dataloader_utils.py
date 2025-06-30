@@ -1,10 +1,14 @@
 #####################################
 # Imports & Dependencies
 #####################################
-import torch
-from torch.utils.data import DataLoader
+from __future__ import annotations
 
-from typing import Tuple, List, Union, Optional
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Sampler, RandomSampler, SequentialSampler
+
+import random, math
+from typing import List, Union, Tuple, Iterable, Optional, Literal
 
 from src.data_setup import coco_dataset, voc_dataset, transforms
 from src.utils import constants, misc
@@ -46,17 +50,22 @@ def yolov3_collate_fn(batch: List[tuple]):
     
     return batch_imgs, batch_targs
 
-def get_dataloaders(root: str, 
-                    dataset_name: str,
-                    batch_size: int, 
-                    input_size: Union[int, Tuple[int, int]],
-                    scale_anchors: List[torch.Tensor],
-                    strides: List[Union[int, Tuple[int, int]]],
-                    ignore_threshold: float = 0.5,
-                    mosaic_prob: float = 0.0,
-                    num_workers: int = 0,
-                    max_imgs: Optional[Tuple[int, int]] = (None, None),
-                    min_box_scale: float = 0.01) -> Tuple[DataLoader, DataLoader]:
+def get_dataloaders(
+    root: str, 
+    dataset_name: Literal['coco', 'voc'],
+    batch_size: int, 
+    scale_anchors: List[torch.Tensor],
+    strides: List[Union[int, Tuple[int, int]]],
+    default_input_size: Union[int, Tuple[int, int]],
+    ignore_threshold: float = 0.5,
+    mosaic_prob: float = 0.0,
+    multiscale_interval: Optional[int] = None,
+    multiscale_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None,
+    max_imgs: Optional[Union[int, Tuple[int, int]]] = None,
+    min_box_scale: float = 0.01,
+    num_workers: int = 0,
+    return_builders = True
+) -> Union[Tuple[DataLoader, DataLoader], Tuple[DataLoaderBuilder, DataLoaderBuilder]]:
     '''
     Creates training and validation/testing dataloaders 
     for MS-COCO (`dataset_name = 'coco'`) or Pascal VOC (`dataset_name = 'voc'`).
@@ -71,14 +80,15 @@ def get_dataloaders(root: str,
         root (str): Path to download datasets.
         dataset_name ('coco' or 'voc'): The dataset to use for the dataloaders.
         batch_size (int): Size used to split the datasets into batches.
-        input_size (int or Tuple[int, int]): Input image size (height, width) to resize the images to.
-                                             If `int`, resizing is assumed to be square.
+        num_workers (int): Number of workers to use for multiprocessing. Default is 0.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
-                                            the (height, width) of the anchor in unit of the input size (pixels).
+                                            the (width, height) of the anchor in unit of the input size (pixels).
         strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale in `scale_anchors`. 
                                                      Each stride represents the downsampling factor between the input image 
                                                      and the feature map at that scale.
+        default_input_size (int or Tuple[int, int]): A default input image size (height, width) to resize the images to.
+                                                     If `int`, resizing is assumed to be square.
         ignore_threshold (float): The IoU threshold used to encode which anchor boxes will be ignored during loss calculation.
                                   Anchor boxes that do not have the highest IoU with a ground truth box, 
                                   but have an IoU >= ignore_threshold, 
@@ -86,17 +96,28 @@ def get_dataloaders(root: str,
                                   Default value is 0.5. 
         mosaic_prob (float): The probability that an image from the dataset's `__getitem__` function is a mosaic.
                              This is only used for the training dataset. Default is 0.0.
-        num_workers (int): Number of workers to use for multiprocessing. Default is 0.
+        multiscale_interval (optional, int): Batch interval to change input image size for multiscale training.
+                                             If None, multiscale training is disabled. Default is None.
+                                             If provided, the following are also required: `multiscale_sizes`.
+        multiscale_sizes (optional, List[Union[int, Tuple[int, int]]]): List of input sizes to use during multiscale training.
+                                                                        Elements can be ints (assumed square) or (H, W) tuples.
+                                                                        Example: [320, (416, 416), 608]. Default is None.
         max_imgs (optional, Union[int, Tuple[int, int]]): The maximum number of images to include for 
                                                           the training dataset (`max_imgs[0]`) and validation dataset (`max_imgs[1]`).
                                                           If `max_imgs[i] = None`, no maximum count is applied.
         min_box_scale (float): The Minimum scale of box width and height relative to the image dimensions.
                                Boxes smaller than this ratio in either dimension are discarded.
                                Default is 0.01 to represent 1% of the image width and height.
+        return_builders (bool): Whether to return `DataLoaderBuilder` instances rather than the `DataLoader` instances themselves.
+                                The `Dataloaders` can then be created with `DataLoaderBuilder.build()`.
 
     Returns:
-        train_loader (DataLoader): Dataloader for the training set.
-        test_loader (DataLoader): Dataloader for the validation/test set.
+        If `return_builders = True`:
+            - train_builder (DataLoaderBuilder): The DataloaderBuilder used to construct the DataLoader for the training set.
+            - test_builder (DataLoaderBuilder): The DataloaderBuilder used to construct the DataLoader for the validation/test set.
+        If `return_builders = False`:
+            - train_loader (DataLoader): Dataloader for the training set.
+            - test_loader (DataLoader): Dataloader for the validation/test set.
     '''
     assert dataset_name in DATASETS.keys(), (
         f'`dataset` must be in {list(DATASETS.keys())}'
@@ -110,11 +131,11 @@ def get_dataloaders(root: str,
 
     test_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
     
-    common_kwargs = {
+    common_dataset_kwargs = {
         'root': root,
         'scale_anchors': scale_anchors,
-        'input_size': input_size,
         'strides': strides,
+        'default_input_size': default_input_size,
         'ignore_threshold': ignore_threshold,
         'min_box_scale': min_box_scale
     }
@@ -123,13 +144,13 @@ def get_dataloaders(root: str,
                                   mosaic_augs = train_mosaic_augs,
                                   mosaic_prob = mosaic_prob,
                                   max_imgs = max_imgs[0],
-                                  **common_kwargs)
+                                  **common_dataset_kwargs)
 
     test_dataset = dataset_class(train = False, 
                                  single_augs = test_single_augs,
                                  mosaic_prob = 0.0,
                                  max_imgs = max_imgs[1],
-                                 **common_kwargs)
+                                 **common_dataset_kwargs)
 
     # Create dataloaders
     if num_workers > 0:
@@ -139,26 +160,124 @@ def get_dataloaders(root: str,
         mp_context = None
         persistent_workers = False
 
-    train_loader = DataLoader(
+    train_sampler = MultiScaleBatchSampler(
+        sampler = RandomSampler(train_dataset),
         dataset = train_dataset,
-        collate_fn = yolov3_collate_fn,
         batch_size = batch_size,
-        shuffle = True,
-        num_workers = num_workers,
-        multiprocessing_context = mp_context,
-        pin_memory = constants.PIN_MEM,
-        persistent_workers = persistent_workers
+        default_input_size = default_input_size,
+        drop_last = False,
+        multiscale_interval = multiscale_interval,
+        multiscale_sizes = multiscale_sizes
     )
-
-    test_loader = DataLoader(
+    
+    test_sampler = MultiScaleBatchSampler(
+        sampler = SequentialSampler(test_dataset),
         dataset = test_dataset,
-        collate_fn = yolov3_collate_fn,
         batch_size = batch_size,
-        shuffle = False,
-        num_workers = num_workers,
-        multiprocessing_context = mp_context,
-        pin_memory = constants.PIN_MEM,
-        persistent_workers = persistent_workers
+        default_input_size = default_input_size,
+        drop_last = False,
+        multiscale_interval = multiscale_interval,
+        multiscale_sizes = multiscale_sizes
     )
 
-    return train_loader, test_loader
+    train_loader_kwargs = {
+        'collate_fn': yolov3_collate_fn,
+        'batch_sampler': train_sampler,
+        'num_workers': num_workers,
+        'multiprocessing_context': mp_context,
+        'pin_memory': constants.PIN_MEM,
+        'persistent_workers': persistent_workers
+    }
+
+    test_loader_kwargs = train_loader_kwargs.copy()
+    test_loader_kwargs['batch_sampler'] = test_sampler
+
+
+    train_builder = DataLoaderBuilder(dataset = train_dataset, dataloader_kwargs = train_loader_kwargs)
+    test_builder = DataLoaderBuilder(dataset = test_dataset, dataloader_kwargs = test_loader_kwargs)
+
+    if return_builders:
+        return train_builder, test_builder
+    else:
+        train_loader = train_builder.build()
+        test_loader = test_builder.build()
+        return train_loader, test_loader
+
+
+#####################################
+# Classes
+#####################################
+class DataLoaderBuilder():
+    def __init__(self, dataset: Dataset, dataloader_kwargs: dict):
+        self.dataset = dataset
+        self.dataloader_kwargs = dataloader_kwargs
+
+    def build(self) -> DataLoader:
+        return DataLoader(dataset = self.dataset, **self.dataloader_kwargs)
+    
+
+class MultiScaleBatchSampler(Sampler):
+    '''
+    From: https://github.com/CaoWGG/multi-scale-training/blob/master/batch_sampler.py
+    '''
+    def __init__(
+        self,
+        sampler: Union[Sampler[int], Iterable[int]],
+        dataset: Dataset,
+        batch_size: int,
+        default_input_size: Union[int. Tuple[int, int]],
+        drop_last: bool = False,
+        multiscale_interval: Optional[int] = None,
+        multiscale_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None
+    ):
+        if multiscale_interval is not None:
+            assert multiscale_sizes is not None, (
+                'If `multiscale_interval` is provided for multiscale training, `multiscale_sizes` must not be None.'
+            )
+
+            # assert callable(getattr(dataset, 'set_input_size', None)), (
+            #     'If `multiscale_interval` is provided for multiscale training, '
+            #     '`dataset` must implement a `set_input_size(new_size)` method.'
+            # )
+            
+        self.sampler = sampler
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.default_input_size = default_input_size
+        self.multiscale_interval = multiscale_interval
+        self.multiscale_sizes = multiscale_sizes
+        
+    def __iter__(self):
+        batch = []
+        num_batches = 0
+        input_size = self.default_input_size
+
+        for samp_idx in self.sampler:
+            batch.append((samp_idx, input_size))
+            
+            if len(batch) == self.batch_size:
+                yield batch
+                
+                num_batches += 1
+                
+                # Change to a new input size if using multiscale training
+                change_size = (
+                    (self.multiscale_interval is not None) and 
+                    (num_batches % self.multiscale_interval == 0)
+                )
+                
+                if change_size:
+                    input_size = random.choice(self.multiscale_sizes)
+                
+                # Reset batch indices
+                batch = []
+                
+        if (not self.drop_last) and (len(batch) > 0):
+            yield batch # Yields the last batch, even if it is shorter than batch_size
+            
+    def __len__(self):
+        if not self.drop_last:
+            return math.ceil(len(self.sampler) / self.batch_size)
+        else:
+            return len(self.sampler) // self.batch_size

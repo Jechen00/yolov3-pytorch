@@ -54,8 +54,8 @@ class COCODataset(DetectionDatasetBase):
     def __init__(self, 
                  root: str, 
                  scale_anchors: List[torch.Tensor],
-                 input_size: Union[int, Tuple[int, int]],
                  strides: List[Union[int, Tuple[int, int]]],
+                 default_input_size: Union[int, Tuple[int, int]],
                  train: bool = True, 
                  single_augs: Optional[Callable] = None,
                  mosaic_augs: Optional[Callable] = None,
@@ -69,22 +69,22 @@ class COCODataset(DetectionDatasetBase):
         if train:
             data_keys = ['train2014', 'val2014', 'anno2014']
             part_file = os.path.join(root, 'trainvalno5k.part') # Path to partition file
-            dataset_name = 'MS-COCO 2014 TrainVal35K'
+            display_name = 'MS-COCO 2014 TrainVal35K'
         else:
             data_keys = ['val2014', 'anno2014']
             part_file = os.path.join(root, '5k.part') # Path to partition file
-            dataset_name = 'MS-COCO 2014 Val5K'
+            display_name = 'MS-COCO 2014 Val5K'
         label_path = os.path.join(root, 'coco.names') # Path to COCO class labels
 
         # Initialize base detection dataset attributes 
             #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
         super().__init__(
             root = root, 
-            scale_anchors = scale_anchors,
-            input_size = input_size, 
-            strides = strides, 
             label_path = label_path, 
-            dataset_name = dataset_name,
+            display_name = display_name,
+            scale_anchors = scale_anchors,
+            strides = strides, 
+            default_input_size = default_input_size,
             ignore_threshold = ignore_threshold,
             single_augs = single_augs, 
             mosaic_augs = mosaic_augs,
@@ -184,7 +184,7 @@ class COCODataset(DetectionDatasetBase):
                 # Tensor of shape (num_bboxes, 5), where last dim is (xmin, ymin, xmax, ymax, class_idx)
                 bbox_tensor = torch.tensor(value, dtype = torch.float32)
                 bbox_tensor[:, :2] += bbox_tensor[:, 2:4] / 2 # Converts XYWH -> CXCYWH
-                bbox_tensor = convert.center_to_corner_format(bbox_tensor) # Converts CXCYWH -> XYXY
+                bbox_tensor = convert.cxcywh_to_xyxy(bbox_tensor) # Converts CXCYWH -> XYXY
 
                 # Change value of filename_to_annos to a suitable format for v2 transforms
                 filename_to_annos[key] = {

@@ -6,7 +6,7 @@ from torch import nn
 from torch.optim import Optimizer, lr_scheduler
 
 import os
-from typing import Union, Dict, Optional
+from typing import Union, Dict, Optional, Any
 import random
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,8 +20,8 @@ def get_colormap_colors(num_clrs, cmap_name = 'tab20'):
     return [tuple(float(clr) for clr in cmap(i)[:3]) 
             for i in range(num_clrs)]
 
-def make_tuple(x: Union[int, float, tuple]):
-    if isinstance(x, (int, float)):
+def make_tuple(x: Union[Any, tuple]) -> tuple:
+    if not isinstance(x, tuple):
         return (x, x)
     else:
         return x

@@ -3,7 +3,7 @@
 #####################################
 import torch
 
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union, Optional, Literal
 BBoxConfProbs = Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]
 
 from src.utils import convert
@@ -59,8 +59,8 @@ def decode_yolov3_bboxes(bboxes: torch.Tensor,
                          anchors: torch.Tensor, 
                          stride: Tuple[int, int],
                          mask: Optional[torch.Tensor] = None,
-                         return_format: str = 'center',
-                         return_units: str = 'pixel') -> torch.Tensor:
+                         return_format: Literal['xyxy', 'cxcywh'] = 'cxcywh',
+                         return_units: Literal['pixel', 'fmap'] = 'pixel') -> torch.Tensor:
     '''
     bboxes shape: (batch_size, num_anchors, fmap_h, fmap_w, 4+)
     anchors torch.tensor: Anchors of shape (num_anchors, 2), where the last dimension gives 
@@ -68,17 +68,14 @@ def decode_yolov3_bboxes(bboxes: torch.Tensor,
                           These anchors would correspond to the feature map scale of `bboxes`.
     stride (Tuple[int, int]): The height and width stride corresponding to the feature map scale of `bboxes`.
     mask shape: (batch_size, num_anchors, fmap_h, fmap_w)
-    return_format ('center' or 'corner'): Return format of the bounding boxes after decoding. 
-                                          'center' refers to CXCYWH and 'corner' refers to XYXY.
-                                          Default is 'center'.
-    return_units (str): Units for decoded bounding boxes.
-                        'pixel' returns coordinates in units of the input size.
-                        'fmap' returns normalized coordinates relative to feature map, i.e., divides pixel coords by stride.
+    return_format ('xyxy' or 'cxcywh'): Return format of the bounding boxes after decoding. Default is 'cxcywh'.
+    return_units ('pixel' or 'fmap'): Units for decoded bounding boxes.
+                        - 'pixel' returns coordinates in units of the input size.
+                        - 'fmap' returns normalized coordinates relative to feature map, i.e., divides pixel coords by stride.
+                        Default is 'pixel'.
 
-    mask filters on last dimension to get tensor of shape (num_filtered, 4+)
+    Note: mask filters on last dimension to get tensor of shape (num_filtered, 4+)
     '''
-    assert return_format in ['center', 'corner'], ("`return_format` must be either 'center' or 'corner'")
-    assert return_units in ['pixel', 'fmap'], ("`return_units` must be either 'pixel' or 'fmap'")
 
     device = bboxes.device
     anchors = anchors.to(device) # In case anchors were not on device
@@ -107,7 +104,7 @@ def decode_yolov3_bboxes(bboxes: torch.Tensor,
         grid_x = grid_x.view(1, 1, fmap_h, fmap_w)
         anchors = anchors.view(1, -1, 1, 1, 2) # Shape: (1, num_anchors, 1, 1, 2)
     
-    # This is in center (CXCYWH) format
+    # This is in CXCYWH format
     bboxes[..., 0] += grid_x # Units: fmap
     bboxes[..., 1] += grid_y # Units: fmap
     bboxes[..., 2:4] = torch.exp(bboxes[..., 2:4]) * anchors # Units: pixel
@@ -117,8 +114,8 @@ def decode_yolov3_bboxes(bboxes: torch.Tensor,
     else:
         bboxes[..., 2:4] /= stride
 
-    if return_format == 'corner':
-        bboxes = convert.center_to_corner_format(bboxes)
+    if return_format == 'xyxy':
+        bboxes = convert.cxcywh_to_xyxy(bboxes)
 
     # Note: The decoded bboxes are in units of the input size (pixels)
     return bboxes
@@ -137,11 +134,11 @@ def decode_yolov3_targets(scale_targs: List[torch.tensor],
     '''
     for i in range(len(scale_targs)):
         # This decodes all cells, but should be faster due to vectorization
-        # The bboxes are decoded to corner (XYXY) format
+        # The bboxes are decoded to XYXY format
         scale_targs[i] = decode_yolov3_bboxes(bboxes = scale_targs[i], 
                                               anchors = scale_anchors[i],
                                               stride = strides[i],
-                                              return_format = 'corner', 
+                                              return_format = 'xyxy', 
                                               return_units = 'pixel')
     targs_dicts = []
     for batch_idx in range(scale_targs[0].shape[0]):
