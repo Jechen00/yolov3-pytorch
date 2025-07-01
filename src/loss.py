@@ -111,7 +111,7 @@ class YOLOv3Loss(nn.Module):
                         input = logits[obj_mask][:, 5:],
                         target = targs_obj[:, 5:].argmax(dim = -1),
                         reduction = 'sum',
-                        label_smoothing = 0.02
+                        label_smoothing = 0.015
                     )
 
                 #----------------------------

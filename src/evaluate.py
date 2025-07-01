@@ -128,7 +128,7 @@ def calc_ious(
             # Squared distance between the centers of bboxes1 and bboxes2
             rho2 = (bboxes1_cxcywh[..., :2] - bboxes2_cxcywh[..., :2]).pow(2).sum(dim = -1)
 
-            penalties.append(rho2 / c2) # Center distance penalty term
+            penalties.append(rho2 / (c2 + eps)) # Center distance penalty term
 
             if reg_type == 'ciou':
                 # -----------------------------

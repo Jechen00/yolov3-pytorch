@@ -1,0 +1,78 @@
+# Note: These default configs are based on those used in notebooks/yolov3_training.ipynb (Used A100 in Google Colab)
+experiment: yolov3_voc         # YOLOv3 model training on Pascal VOC dataset
+
+# Device Configs
+device: null                    # If null, run_training.py will use constants.DEVICE
+
+# Model Configs
+model:
+  backbone_cfgs: ./model_configs/darknet53_backbone.cfg               # Using DarkNet53 backbone
+  backbone_weights: ./pretrained_weights/yolov3_416_coco.weights      # Using weights pretrained on MS-COCO
+  detector_cfgs: ./model_configs/yolov3_detector_voc.cfg
+  input_shape: [1, 3, 416, 416]
+
+
+# Dataloader Configs
+dataloader:
+  # scale_anchors, strides, and default_input_size inherited from model
+  root: ./data/voc
+  dataset_name: voc
+  batch_size: 32
+  num_workers: 10
+  ignore_threshold: 0.5
+  mosaic_prob: 0.7
+  multiscale_interval: 10
+  multiscale_sizes: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608]
+  min_box_scale: 0.01
+  max_imgs: null
+
+
+# Loss Function Configs
+loss_fn:
+  # scale_anchors and strides inherited from model
+  lambda_coord: 1.5
+  lambda_class: 1
+  lambda_conf: 0.6
+  scale_weights: [1, 1.5, 1.5]      # Scale order: large, medium, small
+  alpha: 0.3
+  gamma: 2.0
+  softmax_probs: true           # Applies softmax (single-label) to class logits
+  use_iou_coord: true           # Uses IoU, GIoU, DIoU, or CIoU for coordinate loss
+  iou_coord_reg: ciou
+
+
+# SGD optimizer Configs
+optimizer:
+  momentum: 0.9
+  lr: 0.001
+  weight_decay: 0.0005
+
+
+# Learning Rate Scheduler Configs (Cosine Annealing with Warm-up)
+scheduler:
+  pre_warmup_lrs: [0.0001]
+  T_max: 200
+  warmup_epochs: 3
+  eta_min: 1e-6
+  last_epoch: -1                # Training from scratch
+
+
+# Training/Evaluation Configs
+train_eval:
+  # scale_anchors and strides inherited from model
+  num_epochs: 200
+  accum_steps: 2                # Effective batch size is 64
+  eval_interval: 5
+  eval_start_epoch: 0
+  obj_threshold: 0.01
+  nms_threshold: 0.5
+  map_thresholds: [0.5]
+
+
+# Checkpoint Configs
+checkpoint:
+  save_dir: ./saved_checkpoints
+  checkpoint_name: yolov3_checkpoint.pth
+  ignore_exists: false
+  resume_path: null
+  resume: true                 # Not resuming -> training from scratch

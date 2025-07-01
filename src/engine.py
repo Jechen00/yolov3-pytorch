@@ -37,8 +37,6 @@ def yolov3_train_step(
     
     model.train()
     for i, (imgs, scale_targs) in enumerate(dataloader):
-        print(f'BATCH {i}: IMAGE SHAPE: {imgs.shape}')
-        print(f'BATCH {i}: TARGET SHAPES: {[targs.shape for targs in scale_targs]}')
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
         batch_size = imgs.shape[0]
@@ -172,12 +170,15 @@ def train(
     # -------------------------
     # Setup & Initialization
     # -------------------------
-    assert hasattr(train_builder.dataset, 'mosaic_prob'), (
-        'The dataset in `train_builder` must have a `mosaic_prob` attribute to support disabling mosaic augmentations.'
-    )
-    assert hasattr(val_builder.dataset, 'mosaic_prob'), (
-        'The dataset in `val_builder` must have a `mosaic_prob` attribute to support disabling mosaic augmentations.'
-    )
+    model_device = next(model.parameters()).device
+    if model_device != device:
+        raise ValueError(f'Model is on {model_device}, but device argument is {device}')
+
+    if not hasattr(train_builder.dataset, 'mosaic_prob'):
+        raise AttributeError(
+            'The dataset in `train_builder` must have a `mosaic_prob` attribute '
+            'to support disabling mosaic augmentations.'
+        )
 
     train_loader = train_builder.build()
     val_loader = val_builder.build()
