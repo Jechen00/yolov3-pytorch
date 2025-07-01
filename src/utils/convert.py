@@ -32,8 +32,8 @@ def xyxy_to_cxcywh(bboxes):
     
     x_center = (x_min + x_max) / 2
     y_center = (y_min + y_max) / 2
-    width = x_max - x_min
-    height = y_max - y_min
+    width = (x_max - x_min).clamp(min = 0)
+    height = (y_max - y_min).clamp(min = 0)
     
     bboxes_cxcywh = torch.stack([x_center, y_center, width, height], dim = -1)
     return torch.concat([bboxes_cxcywh, bboxes[..., 4:]], dim = -1)

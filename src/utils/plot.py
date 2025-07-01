@@ -87,7 +87,7 @@ def draw_preds_yolov3(
         plt.gca().add_patch(rect)
         
         if show_scores:
-            txt_str = f'{name.capitalize()}; {pred_res['scores'][i]:.2f}'
+            txt_str = f'{name.capitalize()}; {pred_res["scores"][i]:.2f}'
         else:
             txt_str = name.capitalize()
 

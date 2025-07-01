@@ -324,8 +324,8 @@ class DetectionDatasetBase(ABC, Dataset):
         all_bboxes[:, 1::2] = (all_bboxes[:, 1::2] - crop_ymin).clamp(0, input_h)
 
         # Remove bboxes that are outside of boundaries (i.e. those with almost no width/height post-clamp)
-        valid_mask = ((all_bboxes[:, 2] - all_bboxes[:, 0] > 3) & 
-                      (all_bboxes[:, 3] - all_bboxes[:, 1] > 3))
+        valid_mask = ((all_bboxes[:, 2] - all_bboxes[:, 0] > 5) & 
+                      (all_bboxes[:, 3] - all_bboxes[:, 1] > 5))
         
         # Create mosaic annotation info in a format suitable for v2 transforms
         mosaic_anno_info = {

@@ -175,9 +175,7 @@ def get_dataloaders(
         dataset = test_dataset,
         batch_size = batch_size,
         default_input_size = default_input_size,
-        drop_last = False,
-        multiscale_interval = multiscale_interval,
-        multiscale_sizes = multiscale_sizes
+        drop_last = False
     )
 
     train_loader_kwargs = {
@@ -234,11 +232,6 @@ class MultiScaleBatchSampler(Sampler):
             assert multiscale_sizes is not None, (
                 'If `multiscale_interval` is provided for multiscale training, `multiscale_sizes` must not be None.'
             )
-
-            # assert callable(getattr(dataset, 'set_input_size', None)), (
-            #     'If `multiscale_interval` is provided for multiscale training, '
-            #     '`dataset` must implement a `set_input_size(new_size)` method.'
-            # )
             
         self.sampler = sampler
         self.dataset = dataset

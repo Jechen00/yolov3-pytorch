@@ -54,7 +54,7 @@ class Route(nn.Module):
         '''
         Args:
             layer_outputs (List[torch.Tensor]): List of outputs from layers 0 to i-1. 
-                                                Assuming that the ResConnect is layer i.
+                                                Assuming that the Route is layer i.
         '''
         route_outputs = [layer_outputs[i] for i in self.route_layers]
         return torch.concat(route_outputs, dim = 1)
