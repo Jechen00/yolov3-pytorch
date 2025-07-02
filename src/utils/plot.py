@@ -9,6 +9,7 @@ from typing import Union, List, Tuple, Callable, Optional, Dict, Any
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from matplotlib import patches
+from matplotlib.axes import Axes
 
 from src import evaluate
 from src.data_setup import transforms
@@ -31,13 +32,13 @@ def draw_preds_yolov3(
     softmax_probs: bool = False,
     rm_lb_pad: bool = True,
     show_scores: bool = True,
+    ax: Optional[Axes] = None,
     **kwargs
 ) -> Figure:
     '''
     kwargs is for `matplotlib.pyplot.figure`
     '''
     assert len(class_names) == len(class_clrs), '`class_names` and `class_clrs` must be the same length.'
-    
     device = next(model.parameters()).device
     
     # --------------
@@ -65,9 +66,15 @@ def draw_preds_yolov3(
     # --------------
     # Plotting
     # --------------
-    fig = plt.figure(**kwargs)
+    if ax is None:
+        if not kwargs:
+            kwargs = {'figsize': (10, 10)}
+        fig = plt.figure(**kwargs)
+        ax = plt.gca()
+    else:
+        fig = None
 
-    plt.imshow(processed_img.cpu().permute(1, 2, 0).numpy())
+    ax.imshow(processed_img.cpu().permute(1, 2, 0).numpy())
     for i, (bbox, label) in enumerate(zip(bboxes, labels)):
         label = label.item()
         xmin, ymin, xmax, ymax = bbox.cpu()
@@ -84,22 +91,22 @@ def draw_preds_yolov3(
         rect = patches.Rectangle((xmin, ymin), bbox_w, bbox_h, 
                                  linewidth = bbox_lw, edgecolor = clr, 
                                  facecolor = 'none')
-        plt.gca().add_patch(rect)
+        ax.add_patch(rect)
         
         if show_scores:
             txt_str = f'{name.capitalize()}; {pred_res["scores"][i]:.2f}'
         else:
             txt_str = name.capitalize()
 
-        plt.text(txt_x, txt_y, txt_str,
-                 ha = 'left', va = 'top',
-                 fontsize = 12, color = 'k', weight = 'bold',
-                 bbox = dict(facecolor = clr, alpha = 0.7, pad = 2, edgecolor = 'none'))
+        ax.text(txt_x, txt_y, txt_str,
+                ha = 'left', va = 'top',
+                fontsize = 12, color = 'k', weight = 'bold',
+                bbox = dict(facecolor = clr, alpha = 0.7, pad = 2, edgecolor = 'none'))
 
-    plt.axis(False)
-    plt.close()
-    
-    return fig
+    ax.axis(False)
+    if fig is not None:
+        plt.close(fig)
+        return fig
 
 def plot_loss_results(train_losses: Dict[str, list], 
                       val_losses: Optional[Dict[str, list]] = None) -> Figure:

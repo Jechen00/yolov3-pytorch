@@ -127,7 +127,7 @@ class DetectionDatasetBase(ABC, Dataset):
         self.mosaic_prob = mosaic_prob
         self.min_box_scale = min_box_scale
 
-        self.class_names, self.class_clrs, self.class_to_idx = load_classes(label_path, clr_shuffle_seed = 0)
+        self.class_names, self.class_clrs, self.class_to_idx = load_classes(label_path, clr_shuffle_seed = 42)
         self.anchors_info = self._get_anchors_info() # Dictionary with anchor/scale information for encoding
     
     def __repr__(self) -> str:
