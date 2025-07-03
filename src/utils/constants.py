@@ -7,29 +7,16 @@ import torch
 #####################################
 # General Constants
 #####################################
-# Setup device and multiprocessing context
+# Default device to train on, based on what is available
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
-    MP_CONTEXT = None
-    PIN_MEM = True
 elif torch.backends.mps.is_available():
     DEVICE = torch.device('mps')
-    MP_CONTEXT = 'forkserver'
-    PIN_MEM = False
 else:
     DEVICE = torch.device('cpu')
-    MP_CONTEXT = None
-    PIN_MEM = False
 
 BOLD_START = '\033[1m'
 BOLD_END = '\033[0m'
-
-
-#####################################
-# YOLOv3 Constants
-#####################################
-# This is the default resolution (H, W) that the anchors of config files are relative to
-BASE_YOLO_SIZE = (416, 416)
 
 
 #####################################

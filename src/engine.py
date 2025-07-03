@@ -16,7 +16,6 @@ from typing import List, Optional, Union, Dict, Tuple, Any
 
 from src import postprocess, evaluate
 from src.data_setup.dataloader_utils import DataLoaderBuilder
-from src.data_setup.dataset_utils import DetectionDatasetBase
 from src.utils import misc
 from src.utils.constants import BOLD_START, BOLD_END, LOSS_NAMES, EVAL_NAMES
 
@@ -170,10 +169,6 @@ def train(
     # -------------------------
     # Setup & Initialization
     # -------------------------
-    model_device = next(model.parameters()).device
-    if model_device != device:
-        raise ValueError(f'Model is on {model_device}, but device argument is {device}')
-
     if not hasattr(train_builder.dataset, 'mosaic_prob'):
         raise AttributeError(
             'The dataset in `train_builder` must have a `mosaic_prob` attribute '

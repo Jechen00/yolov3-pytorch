@@ -59,7 +59,7 @@ if __name__ == '__main__':
     model = builder.YOLOv3(backbone = darknet53_backbone, detector_cfgs = model_cfgs['detector_cfgs'])
 
     # Device will be CUDA or MPS if they are avaliable (Change if needed)
-    if device == 'cuda':
+    if device.type == 'cuda':
         model.compile(dynamic = True)
     model = model.to(device)
 
@@ -74,6 +74,7 @@ if __name__ == '__main__':
         strides = strides,
         default_input_size = model_cfgs['input_shape'][-1],
         return_builders = True,
+        device = device,
         **configs['dataloader']
     )
 

@@ -64,6 +64,7 @@ def get_dataloaders(
     max_imgs: Optional[Union[int, Tuple[int, int]]] = None,
     min_box_scale: float = 0.01,
     num_workers: int = 0,
+    device: Union[torch.device, str] = 'cpu',
     return_builders = True
 ) -> Union[Tuple[DataLoader, DataLoader], Tuple[DataLoaderBuilder, DataLoaderBuilder]]:
     '''
@@ -81,6 +82,7 @@ def get_dataloaders(
         dataset_name ('coco' or 'voc'): The dataset to use for the dataloaders.
         batch_size (int): Size used to split the datasets into batches.
         num_workers (int): Number of workers to use for multiprocessing. Default is 0.
+        device (torch.device or str): The device expected to conduct training on. Default is 'cpu'.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in unit of the input size (pixels).
@@ -122,6 +124,8 @@ def get_dataloaders(
     assert dataset_name in DATASETS.keys(), (
         f'`dataset` must be in {list(DATASETS.keys())}'
     )
+
+    # Create datasets
     dataset_class = DATASETS[dataset_name]
     max_imgs = misc.make_tuple(max_imgs)
 
@@ -153,8 +157,18 @@ def get_dataloaders(
                                  **common_dataset_kwargs)
 
     # Create dataloaders
+    device = torch.device(device)
+    if device.type == 'cuda':
+        mp_context = None
+        pin_memory = True
+    elif device.type == 'mps':
+        mp_context = 'forkserver'
+        pin_memory = False
+    else:
+        mp_context = None
+        pin_memory = False
+
     if num_workers > 0:
-        mp_context = constants.MP_CONTEXT
         persistent_workers = True
     else:
         mp_context = None
@@ -183,7 +197,7 @@ def get_dataloaders(
         'batch_sampler': train_sampler,
         'num_workers': num_workers,
         'multiprocessing_context': mp_context,
-        'pin_memory': constants.PIN_MEM,
+        'pin_memory': pin_memory,
         'persistent_workers': persistent_workers
     }
 
