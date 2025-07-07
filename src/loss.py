@@ -5,7 +5,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from typing import List, Optional, Dict, Literal
+from typing import List, Optional, Dict, Literal, Tuple
 
 from src import postprocess, evaluate
 
@@ -26,7 +26,7 @@ class YOLOv3Loss(nn.Module):
                  iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
                  scale_weights: Optional[List[float]] = None,
                  scale_anchors: Optional[List[torch.Tensor]] = None,
-                 strides = None):
+                 strides: Optional[List[Tuple[int, int]]] = None):
         super().__init__()
         if use_iou_coord:
             assert (scale_anchors is not None) and (strides is not None), (
@@ -54,12 +54,12 @@ class YOLOv3Loss(nn.Module):
         else:
             self.scale_weights = [1, 1, 1]
 
-    def forward(
-        self,
-        scale_logits: List[torch.Tensor],
-        scale_targs: List[torch.Tensor]
-    ) -> Dict[str, torch.Tensor]:
+    def forward(self,
+                scale_logits: List[torch.Tensor],
+                scale_targs: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
+        
         loss_dict = {key: 0.0 for key in self.loss_keys}
+        num_classes = scale_targs[0].shape[-1] - 5
 
         # Loop over scales and sum their total losses
         for i, (targs, logits) in enumerate(zip(scale_targs, scale_logits)):
@@ -101,10 +101,16 @@ class YOLOv3Loss(nn.Module):
                 # Class Loss
                 #----------------------------
                 if not self.softmax_probs:
+                    # Apply optional label smoothing
+                    if self.class_smoothing > 0:
+                        targs_probs = targs_obj[:, 5:] * (1 - self.class_smoothing) + (self.class_smoothing / num_classes)
+                    else:
+                        targs_probs = targs_obj[:, 5:]
+
                     # Binary cross-entropy on each class (multi-label, default YOLOv3 behavior)
                     loss_comps['class'] = F.binary_cross_entropy_with_logits(
                         input = logits[obj_mask][:, 5:],
-                        target = targs_obj[:, 5:],
+                        target = targs_probs,
                         reduction = 'sum'
                     )
                     
