@@ -11,7 +11,7 @@ import random, math
 from typing import List, Union, Tuple, Iterable, Optional, Literal
 
 from src.data_setup import coco_dataset, voc_dataset, transforms
-from src.utils import constants, misc
+from src.utils import misc
 
 
 DATASETS = {
@@ -183,14 +183,6 @@ def get_dataloaders(
         multiscale_interval = multiscale_interval,
         multiscale_sizes = multiscale_sizes
     )
-    
-    test_sampler = MultiScaleBatchSampler(
-        sampler = SequentialSampler(test_dataset),
-        dataset = test_dataset,
-        batch_size = batch_size,
-        default_input_size = default_input_size,
-        drop_last = False
-    )
 
     train_loader_kwargs = {
         'collate_fn': yolov3_collate_fn,
@@ -201,9 +193,16 @@ def get_dataloaders(
         'persistent_workers': persistent_workers
     }
 
-    test_loader_kwargs = train_loader_kwargs.copy()
-    test_loader_kwargs['batch_sampler'] = test_sampler
-
+    # Multiscale isn't used for testing/validation
+    test_loader_kwargs = {
+        'collate_fn': yolov3_collate_fn,
+        'batch_size': batch_size,
+        'shuffle': False,
+        'num_workers': num_workers,
+        'multiprocessing_context': mp_context,
+        'pin_memory': pin_memory,
+        'persistent_workers': persistent_workers
+    }
 
     train_builder = DataLoaderBuilder(dataset = train_dataset, dataloader_kwargs = train_loader_kwargs)
     test_builder = DataLoaderBuilder(dataset = test_dataset, dataloader_kwargs = test_loader_kwargs)
