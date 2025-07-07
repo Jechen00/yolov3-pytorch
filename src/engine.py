@@ -174,6 +174,11 @@ def train(
             'The dataset in `train_builder` must have a `mosaic_prob` attribute '
             'to support disabling mosaic augmentations.'
         )
+    
+    if te_cfgs.mosaic_end_epoch is not None:
+        mosaic_end_epoch = te_cfgs.mosaic_end_epoch
+    else:
+        mosaic_end_epoch = int(0.9 * te_cfgs.num_epochs) # Disable in last 10%
 
     train_loader = train_builder.build()
     val_loader = val_builder.build()
@@ -227,9 +232,8 @@ def train(
         # -------------------------
         train_start = time.time()
 
-        # Disable mosaic for the last 20% of epochs
-        # This lets the model fine-tune to more realistic, single images
-        if (epoch == int(0.8 * te_cfgs.num_epochs)) and (train_builder.dataset.mosaic_prob > 0):
+        # Determine if mosaic augmentation should be disabled
+        if (epoch >= mosaic_end_epoch) and (train_builder.dataset.mosaic_prob > 0):
             train_builder.dataset.mosaic_prob = 0 # Set mosaic_prob to 0 in the main dataset
 
             if train_loader.persistent_workers:
@@ -370,6 +374,9 @@ class TrainEvalConfigs():
                                                       Default is None.
         strides (optional, List[Tuple[int, int]]): List of strides (height, width) corresponding to each scale from `scale_anchors`.
                                                    Default is None.
+        mosaic_end_epoch (optional, int): The epoch to disable mosaic augmentation at (if being used). 
+                                          If not provided, mosaic augmentation is disabled in the last 10% of epochs (0.9 * num_epochs). 
+                                          Default is None.
         obj_threshold (optional, float): Threshold to filter out low predicted object probabilities, i.e. P(object). 
                                          Used during evaluation when computing mAP/mAR. Default is None.
         nms_threshold (optional, float): The IoU threshold used during evaluation when performing NMS for mAP/mAR. Default is None.
@@ -387,6 +394,7 @@ class TrainEvalConfigs():
     eval_start_epoch: int = 0
     scale_anchors: Optional[List[torch.Tensor]] = None
     strides: Optional[List[Tuple[int, int]]] = None
+    mosaic_end_epoch: Optional[int] = None
     obj_threshold: Optional[float] = None
     nms_threshold: Optional[float] = None
     map_thresholds: Optional[List[float]] = None

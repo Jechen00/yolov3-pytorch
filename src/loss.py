@@ -20,6 +20,7 @@ class YOLOv3Loss(nn.Module):
                  lambda_conf: float = 1.0,
                  alpha: float = 0.25,
                  gamma: float = 2.0,
+                 class_smoothing: float = 0.0,
                  use_iou_coord: bool = False,
                  softmax_probs: bool = False,
                  iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
@@ -39,7 +40,9 @@ class YOLOv3Loss(nn.Module):
         }
         self.loss_keys = list(self.lambdas.keys()) + ['total']
 
-        self.alpha, self.gamma = alpha, gamma
+        self.alpha = alpha
+        self.gamma = gamma
+        self.class_smoothing = class_smoothing
         self.use_iou_coord = use_iou_coord
         self.softmax_probs = softmax_probs
         self.iou_coord_reg = iou_coord_reg
@@ -74,7 +77,7 @@ class YOLOv3Loss(nn.Module):
             #----------------------------
             conf_logits = logits[valid_mask][..., 4]
             conf_targs = targs[valid_mask][..., 4]
-
+            
             bce_conf_losses = F.binary_cross_entropy_with_logits(
                 input = conf_logits,
                 target = conf_targs,
@@ -111,7 +114,7 @@ class YOLOv3Loss(nn.Module):
                         input = logits[obj_mask][:, 5:],
                         target = targs_obj[:, 5:].argmax(dim = -1),
                         reduction = 'sum',
-                        label_smoothing = 0.015
+                        label_smoothing = self.class_smoothing
                     )
 
                 #----------------------------
