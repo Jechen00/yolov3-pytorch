@@ -132,18 +132,23 @@ def decode_yolov3_targets(scale_targs: List[torch.tensor],
     strides (List[Tuple[int, int]]): List of strides (height, width), one per scale associated 
                                      with `scale_targs` and `scale_anchors`.
     '''
+    decode_scale_targs = []
     for i in range(len(scale_targs)):
         # This decodes all cells, but should be faster due to vectorization
         # The bboxes are decoded to XYXY format
-        scale_targs[i] = decode_yolov3_bboxes(bboxes = scale_targs[i], 
-                                              anchors = scale_anchors[i],
-                                              stride = strides[i],
-                                              return_format = 'xyxy', 
-                                              return_units = 'pixel')
+        decode_scale_targs.append(
+            decode_yolov3_bboxes(
+                bboxes = scale_targs[i], 
+                anchors = scale_anchors[i],
+                stride = strides[i],
+                return_format = 'xyxy', 
+                return_units = 'pixel'
+            )
+        )
     targs_dicts = []
-    for batch_idx in range(scale_targs[0].shape[0]):
+    for batch_idx in range(decode_scale_targs[0].shape[0]):
         targs_res = {'boxes': [], 'labels': []}
-        for targs in scale_targs: 
+        for targs in decode_scale_targs:
             samp_targs = targs[batch_idx] # Shape: (num_anchors, fmap_h, fmap_w, 5 + C)
             targs_obj = samp_targs[samp_targs[..., 4] == 1] # Shape: (num_objs, 5 + C)
 

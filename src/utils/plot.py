@@ -108,32 +108,37 @@ def draw_preds_yolov3(
         plt.close(fig)
         return fig
 
-def plot_loss_results(train_losses: Dict[str, list], 
-                      val_losses: Optional[Dict[str, list]] = None) -> Figure:
+def plot_loss_results(base_train_losses: Optional[Dict[str, list]] = None, 
+                      base_val_losses: Optional[Dict[str, list]] = None,
+                      ema_val_losses: Optional[Dict[str, list]] = None) -> Figure:
 
     loss_keys = ['total', 'coord', 'class', 'conf']
-    assert set(loss_keys) <= set(train_losses.keys()), (
-        '`train_losses` must have the keys: total, coord, class, conf.'
-    )
+    loss_sets = {
+        'base_train_losses': (base_train_losses, 'Train (Base)'),
+        'base_val_losses': (base_val_losses, 'Val (Base)'),
+        'ema_val_losses': (ema_val_losses, 'Val (EMA)')
+    }
 
-    if val_losses is not None:
-            assert set(loss_keys) <= set(val_losses.keys()), (
-        '`val_losses` must have the same keys: total, coord, class, conf.'
-    )
+    for set_key, loss_set in loss_sets.items():
+        if loss_set[0] is not None:
+            assert set(loss_keys) <= set(loss_set[0].keys()), (
+                f'`{set_key}` must have the keys: total, coord, class, conf.'
+            )
 
     fig, axes = plt.subplots(nrows = 2, ncols = 2, figsize = (10, 10), sharex = True)
     flat_axes = axes.flatten()
 
-    for ax, key in zip(flat_axes, loss_keys):
-        loss_name = constants.LOSS_NAMES[key]
-        train_epochs = range(len(train_losses[key]))
-        ax.plot(train_epochs, train_losses[key], label = f'Train: {loss_name}') # Train curve
+    for ax, loss_key in zip(flat_axes, loss_keys):
+        loss_name = constants.LOSS_NAMES[loss_key]
 
-        if val_losses is not None:
-            val_epochs = range(len(val_losses['total']))
-            ax.plot(val_epochs, val_losses[key], label = f'Val: {loss_name}') # Validation curve
+        for loss_set in loss_sets.values():
+            loss_log = loss_set[0]
+            if loss_log is not None:
+                epochs = range(len(loss_log[loss_key]))
+                ax.plot(epochs, loss_log[loss_key], label = f'{loss_set[1]}: {loss_name}') # Loss curve
+
         ax.grid(alpha = 0.5)
-        ax.legend(fontsize = 15)
+        ax.legend(fontsize = 14)
     
     for i in range(2):
         axes[0, i].tick_params(bottom = False)
@@ -149,26 +154,49 @@ def plot_loss_results(train_losses: Dict[str, list],
     plt.close(fig)
     return fig
 
-def plot_eval_results(eval_history: Dict[int, Dict[str, Any]],
-                      eval_keys: List[str]) -> Figure:
+def plot_eval_results(base_eval_history: Dict[int, Dict[str, Any]],
+                      eval_keys: List[str],
+                      ema_eval_history: Optional[Dict[int, Dict[str, Any]]] = None) -> Figure:
     
-    # This assumes each evaluation dictionary has the same keys
-    assert set(eval_keys) <= set(eval_history[0].keys()), (
-        'All keys in `eval_keys` must be present in each dictionary of `eval_history`'
-    )
+    eval_sets = {
+        'base_eval_history': (base_eval_history, 'Base'),
+        'ema_eval_history': (ema_eval_history, 'EMA')
+    }
+
+    for set_key, eval_set in eval_sets.items():
+        eval_log = eval_set[0]
+        if eval_log is not None:
+            first_eval_epoch = list(eval_log.keys())[0]
+            # This assumes each evaluation dictionary has the same keys
+            assert set(eval_keys) <= set(eval_log[first_eval_epoch].keys()), (
+                f'All keys in `eval_keys` must be present in each dictionary of `{set_key}`'
+            )
 
     fig = plt.figure(figsize = (8, 8))
-    eval_epochs = list(eval_history.keys())
+    ax = plt.gca()
 
-    for key in eval_keys:
-        size_name = constants.EVAL_NAMES.get(key, key)
-        size_values = [eval_history[epoch][key] for epoch in eval_epochs]
-        plt.plot(eval_epochs, size_values, label = size_name)
+    num_plot_logs = -1
+    for eval_set in eval_sets.values():
+        eval_log = eval_set[0]
+        if eval_log is not None:
+            num_plot_logs += 1
+            plot_lines = []
+            eval_epochs = list(eval_log.keys())
+            for key in eval_keys:
+                eval_name = constants.EVAL_NAMES.get(key, key)
+                eval_values = [eval_log[epoch][key] for epoch in eval_epochs]
+                line, = ax.plot(eval_epochs, eval_values, label = f'{eval_set[1]}: {eval_name}')
+                plot_lines.append(line)
 
-    plt.legend(fontsize = 20)
-    plt.grid(alpha = 0.5)
-    plt.xlabel('Epochs', fontsize = 20)
-    plt.ylabel('Evaluation Metric', fontsize = 20)
+        legend = ax.legend(handles = plot_lines, 
+                           fontsize = 14,             
+                           loc = 'lower right',
+                           bbox_to_anchor = (1 - num_plot_logs * 0.35, 0))
+        ax.add_artist(legend)
+
+    ax.grid(alpha = 0.5)
+    ax.set_xlabel('Epochs', fontsize = 20)
+    ax.set_ylabel('Evaluation Metric', fontsize = 20)
 
     plt.close(fig)
     return fig

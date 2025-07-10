@@ -6,11 +6,17 @@ from torch import nn
 from torch.optim import Optimizer, lr_scheduler
 
 import os
-from typing import Union, Dict, Optional, Any
+from typing import Union, Dict, Optional, Any, Tuple, List
 import random
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.models.ema_model import EMA
+from src.utils.constants import BOLD_START, BOLD_END
+
+TrainLosses = Dict[str, List[float]]
+ValLosses = Dict[str, TrainLosses]
+EvalHistories = Dict[str, Dict[int, dict]]
 
 #####################################
 # Functions
@@ -46,28 +52,34 @@ def set_seed(seed: int = 0):
     torch.use_deterministic_algorithms(True)
     os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
-def save_checkpoint(model: nn.Module, 
+def save_checkpoint(base_model: nn.Module, 
                     optimizer: Optimizer, 
-                    train_losses: Dict[str, list],
-                    val_losses: Dict[str, list],
-                    eval_history: Dict[int, list],
+                    base_train_losses: Dict[str, list],
+                    val_losses: Dict[str, Dict[str, list]],
+                    eval_histories: Dict[str, Dict[int, list]],
                     last_epoch: int,
                     scheduler: Optional[lr_scheduler._LRScheduler] = None, 
+                    ema: Optional[EMA] = None,
                     save_dir: Optional[str] = None, 
                     checkpoint_name: Optional[str] = None,
                     save_path: Optional[str] = None):
     '''
-    Saves a checkpoint containing the model, optimizer, scheduler state dicts,
+    Saves a checkpoint containing the base model, optimizer, scheduler, and EMA model state dicts,
     along with training/validation metrics and epoch index.
 
     Args:
-        model (nn.Module): Model to save.
+        base_model (nn.Module): The main model to save.
         optimizer (Optimizer): Optimizer used during training.
-        train_losses (Dict[str, list]): Dictionary of lists storing train loss values per epoch.
-        val_losses (Dict[str, list]): Dictionary of lists storing validation loss values per epoch.
-        eval_history (Dict[int, list]): Dictionary tracking evaluation metrics.
+        base_train_losses (Dict[str, list]): Dictionary of lists storing train loss values per epoch for `base_model`.
+        val_losses (Dict[str, Dict[str, list]]): Dictionary mapping model keys 
+                                                 (e.g. 'base' for `base_model` and 'ema' for `ema`)
+                                                 to a dictionary storing their validation loss values per epoch.
+        eval_histories (Dict[str, Dict[int, list]]): Dictionary mapping model keys 
+                                                     (e.g. 'base' for `base_model` and 'ema' for `ema`)
+                                                     to a dictionary tracking evaluation metrics.
         last_epoch (int): Index of the last completed epoch.
         scheduler (optional, lr_scheduler._LRScheduler): Learning rate scheduler.
+        ema (optional, EMA): An instance of the EMA class used to maintain an EMA version of the `base_model`.
         save_dir (Optional[str]): Directory to save the checkpoint.
         checkpoint_name (Optional[str]): Filename for the checkpoint (should end with '.pth' or '.pt').
         save_path (Optional[str]): Full path to save the checkpoint. 
@@ -84,20 +96,58 @@ def save_checkpoint(model: nn.Module,
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(save_path), exist_ok = True)
 
-    # Create checkpoint dictionary
-    if scheduler is not None:
-        scheduler_save = scheduler.state_dict()
-    else:
-        scheduler_save = None
+    scheduler_save = scheduler.state_dict() if scheduler is not None else None
+    ema_save = ema.state_dict() if ema is not None else None
 
+    # Create checkpoint dictionary
     checkpoint = {
-        'model': model.state_dict(),
+        'base_model': base_model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler_save,
-        'train_losses': train_losses,
+        'ema': ema_save,
+        'base_train_losses': base_train_losses,
         'val_losses': val_losses,
-        'eval_history': eval_history,
+        'eval_histories': eval_histories,
         'last_epoch': last_epoch
     }
 
     torch.save(obj = checkpoint, f = save_path)
+
+def load_checkpoint(
+    checkpoint_path: str,
+    base_model: nn.Module,
+    optimizer: Optimizer,
+    scheduler: Optional[lr_scheduler._LRScheduler] = None,
+    ema: Optional[EMA] = None,
+    device: Union[str, torch.device] = 'cpu'
+) -> Tuple[int, TrainLosses, ValLosses, EvalHistories]:
+    '''
+    Loads a saved training checkpoint from `checkpoint_path`.
+    '''
+    checkpoint = torch.load(checkpoint_path, map_location = device)
+    base_model.load_state_dict(checkpoint['base_model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+    last_epoch = checkpoint['last_epoch']
+    base_train_losses = checkpoint['base_train_losses']
+    val_losses = checkpoint['val_losses']
+    eval_histories = checkpoint['eval_histories']
+
+    if scheduler is not None:
+        assert checkpoint.get('scheduler') is not None, 'No scheduler state dict saved in checkpoint'
+        scheduler.load_state_dict(checkpoint['scheduler'])
+
+    if ema is not None:
+        if checkpoint.get('ema') is not None:
+            ema.load_state_dict(checkpoint['ema'])
+
+        else:
+            # 0.0 is filler to match lengths in val_losses['base]
+            val_losses['ema'] = {key: [0.0] * len(value) for value, key in val_losses['base'].items()}
+            eval_histories['ema'] = {}
+
+            print(
+                f'{BOLD_START}[NOTE]{BOLD_END} '
+                'EMA provided, but no EMA state dict found in checkpoint. Continuing without loading a saved state dict...'
+            )
+    return last_epoch, base_train_losses, val_losses, eval_histories

@@ -247,7 +247,7 @@ def predict_yolov3(model: nn.Module,
         model.eval()
 
     with torch.inference_mode():
-        scale_logits = model(X) # List of tensors. Each tensor is shape: (batch_size, num_anchors, S, S, 5 + C)
+        scale_logits = model(X) # List of tensors with shape: (batch_size, num_anchors, fmap_h, fmap_w, 5 + C)
     
     preds_dicts = predict_yolov3_from_logits(
         scale_logits = scale_logits,

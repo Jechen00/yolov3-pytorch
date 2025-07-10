@@ -91,7 +91,13 @@ class WeightLoadable():
         '''     
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-        _ = self.forward(dummy_X) # Initalize lazy layers
+
+        orig_training = self.training  # True if training mode, False if eval mode
+        self.eval()
+        with torch.inference_mode():
+            _ = self.forward(dummy_X) # Initalize lazy layers
+        if orig_training:
+            self.train()
 
         with open(weights_file, 'rb') as f:
             header = np.fromfile(f, dtype = np.int32, count = 5)

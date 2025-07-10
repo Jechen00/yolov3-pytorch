@@ -21,6 +21,7 @@ class YOLOv3Loss(nn.Module):
                  alpha: float = 0.25,
                  gamma: float = 2.0,
                  class_smoothing: float = 0.0,
+                 use_focal_conf: bool = False,
                  use_iou_coord: bool = False,
                  softmax_probs: bool = False,
                  iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
@@ -43,6 +44,7 @@ class YOLOv3Loss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
         self.class_smoothing = class_smoothing
+        self.use_focal_conf = use_focal_conf
         self.use_iou_coord = use_iou_coord
         self.softmax_probs = softmax_probs
         self.iou_coord_reg = iou_coord_reg
@@ -84,14 +86,19 @@ class YOLOv3Loss(nn.Module):
                 reduction = 'none'
             )
 
-            # targ = 1 --> p_t = prob; alpha_t = alpha
-            # targ = 0 --> p_t = 1 - prob; alpha_t = 1 - alpha
-            conf_preds = torch.sigmoid(conf_logits)
-            p_t = torch.where(conf_targs == 1, conf_preds, 1 - conf_preds)
-            alpha_t = torch.where(conf_targs == 1, self.alpha, 1 - self.alpha)
+            if not self.use_focal_conf:
+                # Possibly add pos_weight or separate obj and nobj for this?
+                loss_comps['conf'] = bce_conf_losses.sum()
 
-            conf_focal_loss = alpha_t * (1 - p_t)**self.gamma * bce_conf_losses
-            loss_comps['conf'] = conf_focal_loss.sum()
+            else:
+                # targ = 1 --> p_t = prob; alpha_t = alpha
+                # targ = 0 --> p_t = 1 - prob; alpha_t = 1 - alpha
+                conf_preds = torch.sigmoid(conf_logits)
+                p_t = torch.where(conf_targs == 1, conf_preds, 1 - conf_preds)
+                alpha_t = torch.where(conf_targs == 1, self.alpha, 1 - self.alpha)
+
+                conf_focal_loss = alpha_t * (1 - p_t)**self.gamma * bce_conf_losses
+                loss_comps['conf'] = conf_focal_loss.sum()
 
             # Compute object component losses if objects exist
             if obj_mask.any():

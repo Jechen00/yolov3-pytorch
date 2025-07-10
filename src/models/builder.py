@@ -8,7 +8,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from src.models import blocks
-from src.utils import yolo_loader, constants
+from src.utils import yolo_loader
 
 
 #####################################
@@ -169,7 +169,7 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
                 # Expects channels = num_anchors * (5 + C)
                 batch_size, channels, height, width = Y.shape
                 
-                # Reshape and permute to (batch_size, num_anchors, S, S, C + 5)
+                # Reshape and permute to (batch_size, num_anchors, fmap_height, fmap_width, 5 + C)
                 scale_Y = Y.reshape(batch_size, len(scale_cfg['anchors']), 
                                     scale_cfg['num_classes'] + 5, height, width)
                 scale_Y = scale_Y.permute(0, 1, 3, 4, 2)
@@ -232,7 +232,13 @@ class YOLOv3(nn.Module):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-        scale_logits = self.forward(dummy_X)
+
+        orig_training = self.training  # True if training mode, False if eval mode
+        self.eval()
+        with torch.inference_mode():
+            scale_logits = self.forward(dummy_X)
+        if orig_training:
+            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
@@ -246,7 +252,13 @@ class YOLOv3(nn.Module):
     def init_detector_weights(self, input_shape: tuple):
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-        _ = self.forward(dummy_X) # Initalize lazy layers
+
+        orig_training = self.training  # True if training mode, False if eval mode
+        self.eval()
+        with torch.inference_mode():
+            _ = self.forward(dummy_X) # Initalize lazy layers
+        if orig_training:
+            self.train()
 
         for module in self.detector.modules():
             if isinstance(module, nn.Conv2d):
@@ -318,7 +330,13 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-        scale_logits = self.forward(dummy_X)
+
+        orig_training = self.training  # True if training mode, False if eval mode
+        self.eval()
+        with torch.inference_mode():
+            scale_logits = self.forward(dummy_X)
+        if orig_training:
+            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
