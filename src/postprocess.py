@@ -150,7 +150,7 @@ def decode_yolov3_targets(scale_targs: List[torch.tensor],
         targs_res = {'boxes': [], 'labels': []}
         for targs in decode_scale_targs:
             samp_targs = targs[batch_idx] # Shape: (num_anchors, fmap_h, fmap_w, 5 + C)
-            targs_obj = samp_targs[samp_targs[..., 4] == 1] # Shape: (num_objs, 5 + C)
+            targs_obj = samp_targs[samp_targs[..., 4] > 0] # Shape: (num_objs, 5 + C)
 
             targs_res['boxes'].append(targs_obj[..., :4])
             targs_res['labels'].append(targs_obj[..., 5:].argmax(dim = -1))

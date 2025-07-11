@@ -14,6 +14,9 @@ from src import postprocess, evaluate
 # Loss Class
 #####################################
 class YOLOv3Loss(nn.Module):
+    '''
+    Loss function for training a YOLOv3 model.
+    '''
     def __init__(self,
                  lambda_coord: float = 1.0, 
                  lambda_class: float = 1.0, 
@@ -71,12 +74,12 @@ class YOLOv3Loss(nn.Module):
             # Loss components are defaulted to 0
             loss_comps = {key: 0.0 for key in self.loss_keys[:-1]}
 
-            obj_mask = (targs[..., 4] == 1)
+            obj_mask = (targs[..., 4] > 0)
             valid_mask = torch.logical_not(targs[..., 4] == -1)
 
-            #----------------------------
-            # Confidence Loss (Focal)
-            #----------------------------
+            #------------------
+            # Confidence Loss
+            #------------------
             conf_logits = logits[valid_mask][..., 4]
             conf_targs = targs[valid_mask][..., 4]
             
@@ -91,11 +94,11 @@ class YOLOv3Loss(nn.Module):
                 loss_comps['conf'] = bce_conf_losses.sum()
 
             else:
-                # targ = 1 --> p_t = prob; alpha_t = alpha
+                # targ > 0 --> p_t = prob; alpha_t = alpha
                 # targ = 0 --> p_t = 1 - prob; alpha_t = 1 - alpha
                 conf_preds = torch.sigmoid(conf_logits)
-                p_t = torch.where(conf_targs == 1, conf_preds, 1 - conf_preds)
-                alpha_t = torch.where(conf_targs == 1, self.alpha, 1 - self.alpha)
+                p_t = torch.where(conf_targs > 0, conf_preds, 1 - conf_preds)
+                alpha_t = torch.where(conf_targs > 0, self.alpha, 1 - self.alpha)
 
                 conf_focal_loss = alpha_t * (1 - p_t)**self.gamma * bce_conf_losses
                 loss_comps['conf'] = conf_focal_loss.sum()
@@ -103,10 +106,11 @@ class YOLOv3Loss(nn.Module):
             # Compute object component losses if objects exist
             if obj_mask.any():
                 targs_obj = targs[obj_mask] # Shape: (num_objects, 5 + C)
+                obj_weights = targs_obj[..., 4] # Shape: (num_objects,) and represents P(object)
 
-                #----------------------------
+                #------------------
                 # Class Loss
-                #----------------------------
+                #------------------
                 if not self.softmax_probs:
                     # Apply optional label smoothing
                     if self.class_smoothing > 0:
@@ -115,34 +119,37 @@ class YOLOv3Loss(nn.Module):
                         targs_probs = targs_obj[:, 5:]
 
                     # Binary cross-entropy on each class (multi-label, default YOLOv3 behavior)
-                    loss_comps['class'] = F.binary_cross_entropy_with_logits(
+                    class_loss = F.binary_cross_entropy_with_logits(
                         input = logits[obj_mask][:, 5:],
                         target = targs_probs,
-                        reduction = 'sum'
-                    )
+                        reduction = 'none'
+                    ).sum(dim = -1)
                     
                 else:
                     # Cross-entropy with logits and class indices (single-label)
-                    loss_comps['class'] =  F.cross_entropy(
+                    class_loss =  F.cross_entropy(
                         input = logits[obj_mask][:, 5:],
                         target = targs_obj[:, 5:].argmax(dim = -1),
-                        reduction = 'sum',
+                        reduction = 'none',
                         label_smoothing = self.class_smoothing
                     )
 
-                #----------------------------
+                # class_loss shape: (num_objects,)
+                loss_comps['class'] = (obj_weights * class_loss).sum()
+
+                #------------------
                 # Coordinate Loss
-                #----------------------------
+                #------------------
                 # Apply sigmoid to t_x, t_y (center offsets)
                 preds = logits.clone()
                 preds[..., :2] = torch.sigmoid(preds[..., :2])
 
                 if not self.use_iou_coord:
-                    loss_comps['coord'] = F.mse_loss(
+                    coord_loss = F.mse_loss(
                         input = preds[obj_mask][:, :4],
                         target = targs_obj[:, :4],
-                        reduction = 'sum'
-                    )
+                        reduction = 'none'
+                    ).sum(dim = -1)
 
                 else:
                     preds_bboxes = postprocess.decode_yolov3_bboxes(
@@ -164,12 +171,14 @@ class YOLOv3Loss(nn.Module):
                     
                     _, reg_ious = evaluate.calc_ious(bboxes1 = preds_bboxes, bboxes2 = targs_bboxes, 
                                                      elementwise = True, reg_type = self.iou_coord_reg)
-                    
-                    loss_comps['coord'] = (1 - reg_ious).sum()
+                    coord_loss = 1 - reg_ious
 
-            #----------------------------
+                # coord_loss shape: (num_objects,)
+                loss_comps['coord'] = (obj_weights * coord_loss).sum()
+
+            #------------------
             # Full YOLOv3 Loss
-            #----------------------------
+            #------------------
             # Add each component loss to loss_dict
             for key, value in loss_comps.items():
                 loss_dict[key] += value

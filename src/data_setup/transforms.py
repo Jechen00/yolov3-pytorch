@@ -17,8 +17,8 @@ from src.utils import misc
 # Functions
 #####################################
 def get_single_transforms(train: bool = True,
-                   aug_only: bool = False,
-                   size: Union[int, Tuple[int, int]] = (416, 416)) -> Optional[v2.Compose]:
+                          aug_only: bool = False,
+                          size: Union[int, Tuple[int, int]] = (416, 416)) -> Optional[v2.Compose]:
     '''
     Creates a torchvision transform pipeline for preprocessing a single image 
     during training or validation/testing. If performing multiscale training, 
@@ -42,22 +42,22 @@ def get_single_transforms(train: bool = True,
     if train:
         transforms = [
             v2.ColorJitter(
-                brightness = 0.6,
+                brightness = 0.5,
                 saturation = 0.4,
-                hue = 0.03
+                hue = 0.02
             ),
             v2.RandomGrayscale(p = 0.05),
             v2.RandomIoUCrop(
                 min_scale = 0.5,
                 min_aspect_ratio = 0.75,
                 max_aspect_ratio = 1.33,
-                sampler_options = [0.3, 0.4, 0.5, 0.7, 0.9, 1.1, 1.2],
+                sampler_options = [0.3, 0.4, 0.5, 0.7, 0.9, 1.1],
                 trials = 20
             ),
             v2.RandomHorizontalFlip(p = 0.5),
             v2.RandomAffine(
-                degrees = 5,
-                shear = 5,
+                degrees = 10,
+                scale = (0.9, 1.1),
                 translate = (0.1, 0.1),
                 fill = 114
             ),
@@ -76,11 +76,12 @@ def get_single_transforms(train: bool = True,
     compose_transforms = v2.Compose(transforms) if transforms else None
     return compose_transforms
 
-def get_mosaic_transforms(aug_only: bool = False) -> Optional[v2.Compose]:
+def get_post_multi_transforms(aug_only: bool = False) -> Optional[v2.Compose]:
     '''
-    Creates a torchvision transform pipeline for preprocessing a mosaic image during training.
+    Creates a torchvision transform pipeline for preprocessing a target image 
+    **after** a multi-image augmentation (e.g. mosaic or mix-up).
     This includes data augmentations and ToImage transforms. 
-    It is also assumed that any resizing is performed during the creation of the mosaic.
+    It is also assumed that any resizing is performed during the creation of the target image.
 
     Args:
         aug_only (bool): Whether to only return the data augmentation transforms. Default is False.
@@ -90,13 +91,11 @@ def get_mosaic_transforms(aug_only: bool = False) -> Optional[v2.Compose]:
     '''
     transforms = [
         v2.ColorJitter(
-            brightness = 0.6,
+            brightness = 0.5,
             saturation = 0.4,
-            hue = 0.03
+            hue = 0.02
         ),
-        v2.RandomGrayscale(p = 0.05),
-        v2.RandomHorizontalFlip(p = 0.5),
-        v2.RandomApply([v2.GaussianBlur(kernel_size = 3, sigma = (0.1, 1.5))], p = 0.1)
+        v2.RandomHorizontalFlip(p = 0.5)
     ]
 
     if not aug_only:
@@ -233,7 +232,7 @@ def functional_resize(
 
         # Convert to XYXY format
         xyxy_bboxes = box_convert(
-            boxes = anno_info['boxes'].data, in_fmt = orig_fmt, out_fmt = 'xyxy'
+            boxes = anno_info['boxes'], in_fmt = orig_fmt, out_fmt = 'xyxy'
         )
 
         xyxy_bboxes[:, ::2] *= size[1] / orig_w

@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from urllib.parse import urlparse
 import seaborn as sns
 import random
-from typing import Tuple, List, Union, Callable, Optional
+from typing import Tuple, List, Union, Callable, Optional, Literal
 
 from src import evaluate
 from src.data_setup import transforms
@@ -110,8 +110,10 @@ class DetectionDatasetBase(ABC, Dataset):
                  default_input_size: Union[int, Tuple[int, int]],
                  ignore_threshold: float,
                  single_augs: Optional[Callable] = None,
-                 mosaic_augs: Optional[Callable] = None,
-                 mosaic_prob: float = 0.0,
+                 multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
+                 post_multi_augs: Optional[Callable] = None,
+                 multi_aug_prob: float = 0.0,
+                 mixup_alpha: float = 0.5,
                  min_box_scale: float = 0.01):
         super().__init__()
 
@@ -123,9 +125,17 @@ class DetectionDatasetBase(ABC, Dataset):
         self.default_input_size = misc.make_tuple(default_input_size)
         self.ignore_threshold = ignore_threshold
         self.single_augs = single_augs
-        self.mosaic_augs = mosaic_augs
-        self.mosaic_prob = mosaic_prob
+        self.multi_augs = multi_augs
+        self.post_multi_augs = post_multi_augs
+        self.multi_aug_prob = multi_aug_prob
+        self.mixup_alpha = mixup_alpha
         self.min_box_scale = min_box_scale
+
+        self.mixup_beta_dist = torch.distributions.Beta(mixup_alpha, mixup_alpha)
+        self.multi_aug_map = {
+            'mosaic': self.load_mosaic_image_and_targets,
+            'mixup': self.load_mixup_image_and_targets
+        }
 
         self.class_names, self.class_clrs, self.class_to_idx = load_classes(label_path, clr_shuffle_seed = 42)
         self.anchors_info = self._get_anchors_info() # Dictionary with anchor/scale information for encoding
@@ -171,8 +181,8 @@ class DetectionDatasetBase(ABC, Dataset):
 
         Returns:
             img (Image.Image or torch.Tensor): The transformed image based on `idx`. 
-                                               If `self.mosaic_prob > 0`, there is a `self.mosaic_prob * 100%` chance 
-                                               that a mosaic of 4 images is returned.
+                                               If `self.multi_aug_prob > 0`, there is a `self.multi_aug_prob * 100%` chance 
+                                               that the image undergoes a multi-image augmentation (e.g. mosaic or mixup).
             scale_targs (List[torch.Tensor]): List of encoded target tensors, one per scale of the model.
                                               Each has shape: (num_anchors, fmap_h, fmap_w, 5 + C)
         '''
@@ -184,11 +194,16 @@ class DetectionDatasetBase(ABC, Dataset):
             idx, input_size = input_info, self.default_input_size
 
         # P(X < x) = x for X ~ Unif[0, 1]
-        if random.uniform(0, 1) < self.mosaic_prob:
-            return self.load_mosaic_image_and_targets(idx, input_size)
+        if random.uniform(0, 1) < self.multi_aug_prob:
+            if isinstance(self.multi_augs, list):
+                load_multi_img_targs = self.multi_aug_map[random.choice(self.multi_augs)]
+            else:
+                load_multi_img_targs = self.multi_aug_map[self.multi_augs]
+
+            return load_multi_img_targs(idx, input_size)
         else:
             return self.load_single_image_and_targets(idx, input_size) 
-
+        
     def load_single_image_and_targets(
             self, 
             idx: int,
@@ -236,7 +251,7 @@ class DetectionDatasetBase(ABC, Dataset):
     ) -> Tuple[Union[Image.Image, torch.Tensor], List[torch.Tensor]]:
         '''
         Loads a mosaic of 4 image along with their corresponding targets. 
-        The top-left image panel is given by `idx`, while the rest of the 3 images are random chosen from the dataset.
+        The top-left image panel is given by `idx`, while the rest of the 3 images are randomlt chosen from the dataset.
 
         Reference: https://gmongaras.medium.com/yolox-explanation-mosaic-and-mixup-for-data-augmentation-3839465a3adf
 
@@ -292,7 +307,7 @@ class DetectionDatasetBase(ABC, Dataset):
             mosaic_img.paste(img, (paste_x, paste_y))
 
             # Adjust bounding box positions
-            bboxes = anno_info['boxes'].data
+            bboxes = anno_info['boxes']
             bboxes[:, ::2] += paste_x
             bboxes[:, 1::2] += paste_y
 
@@ -306,10 +321,10 @@ class DetectionDatasetBase(ABC, Dataset):
         # Cropping Mosaic
         # -------------------
         # (crop_cx, crop_cy) is a random position chosen 
-            # within a (input_w/4)x(input_h/4) box centered on the mosaic image
+            # within a (input_w/2)x(input_h/2) box centered on the mosaic image
             # This ensures that the final cropped image will always contain a part of all 4 images
-        crop_cx = random.randint(7 * input_w // 8, 9 * input_w // 8)
-        crop_cy = random.randint(7 * input_h // 8, 9 * input_h // 8)
+        crop_cx = random.randint(3 * input_w // 4, 5 * input_w // 4)
+        crop_cy = random.randint(3 * input_h // 4, 5 * input_h // 4)
 
         # Crop region
         crop_xmin = crop_cx - input_w // 2
@@ -337,8 +352,8 @@ class DetectionDatasetBase(ABC, Dataset):
             'labels': all_labels[valid_mask]
         }
 
-        if self.mosaic_augs is not None:
-            mosaic_img, mosaic_anno_info = self.mosaic_augs(mosaic_img, mosaic_anno_info)
+        if self.post_multi_augs is not None:
+            mosaic_img, mosaic_anno_info = self.post_multi_augs(mosaic_img, mosaic_anno_info)
 
         mosaic_img = F.to_image(mosaic_img)
         mosaic_img = F.to_dtype(mosaic_img, dtype = torch.float32, scale = True) # Rescales to [0, 1]
@@ -346,6 +361,74 @@ class DetectionDatasetBase(ABC, Dataset):
 
         return mosaic_img, scale_targs
     
+    def load_mixup_image_and_targets(
+            self, 
+            idx: int,
+            input_size: Union[int, Tuple[int, int]]
+    ) -> Tuple[Union[Image.Image, torch.Tensor], List[torch.Tensor]]:
+        '''
+        Loads a mix-up of 2 image along with their corresponding targets. 
+        One of the images in the mix-up is given by `idx`, while the other is randomly chosen from the dataset.
+
+        Reference: https://gmongaras.medium.com/yolox-explanation-mosaic-and-mixup-for-data-augmentation-3839465a3adf
+
+        Args:
+            idx (int): Image index for one of the images used in the mix-up
+            input_size (int or Tuple[int, int]): The size (height, width) to resize the mix-up into. 
+                                                 If `int`, it is assumed to be square.
+                                                 All images in the mix-up are resized based on `input_size`,
+                                                 however, their aspect ratios are preserved (letterbox transform).
+
+        Returns:
+            mixup_img (Image.Image or torch.Tensor): The transformed mix-up image.
+            scale_targs (List[torch.Tensor]): List of encoded target tensors, one per scale of the model.
+                                              Each has shape: (num_anchors, fmap_h, fmap_w, 5 + C)
+        '''
+        lam = self.mixup_beta_dist.sample()
+        img_weights = [lam, 1 - lam]
+        input_size = misc.make_tuple(input_size)
+
+        all_idxs = [idx] + random.sample(range(self.__len__()), 1)
+        all_imgs = [] # Stores image tensors that have been rescaled to [0, 1]
+        all_anno_infos = [] # Stores corresponding annotation information for image tensors
+
+        for img_idx in all_idxs:
+            img = self.get_img(img_idx)
+            anno_info = self.get_anno_info(img_idx)
+            
+            # Resize image to a common input shape, while preserving aspect ratio
+            img, anno_info = transforms.functional_letterbox(img = img, anno_info = anno_info, 
+                                                             size = input_size, fill = 114)
+            img = F.to_image(img)
+            img = F.to_dtype(img, dtype = torch.float32, scale = True)
+            
+            all_imgs.append(img)
+            all_anno_infos.append(anno_info)
+            
+        mixup_img = img_weights[0] * all_imgs[0] + img_weights[1] * all_imgs[1]
+
+        mixup_labels = torch.concat([anno_info['labels'] for anno_info in all_anno_infos])
+        mixup_bboxes = torch.concat([anno_info['boxes'] for anno_info in all_anno_infos], dim = 0)
+        mixup_weights = torch.concat([
+            weight * torch.ones_like(anno_info['labels'])
+            for weight, anno_info in zip(img_weights, all_anno_infos)
+        ])
+
+        mixup_anno_info = {
+            'labels': mixup_labels,
+            'boxes': BoundingBoxes(
+                data = mixup_bboxes,
+                format = all_anno_infos[0]['boxes'].format,
+                canvas_size = input_size
+            )
+        }
+
+        if self.post_multi_augs is not None:
+            mixup_img, mixup_anno_info = self.post_multi_augs(mixup_img, mixup_anno_info)
+        scale_targs = self._encode_yolov3_targets(mixup_anno_info, input_size, obj_weights = mixup_weights)
+
+        return mixup_img, scale_targs
+
     def _get_anchors_info(self):
         anchor_scale_idxs, anchors_per_scale = [], []
         for idx, anchors in enumerate(self.scale_anchors):
@@ -362,7 +445,12 @@ class DetectionDatasetBase(ABC, Dataset):
         
         return anchors_info
 
-    def _encode_yolov3_targets(self, anno_info: dict, input_size: Union[int, Tuple[int, int]]) -> List[torch.Tensor]:
+    def _encode_yolov3_targets(
+            self, 
+            anno_info: dict, 
+            input_size: Union[int, Tuple[int, int]],
+            obj_weights: Optional[torch.Tensor] = None
+        ) -> List[torch.Tensor]:
         anchors_wh = self.anchors_info['anchors_wh']
         num_tot_anchors = self.anchors_info['num_tot_anchors']
         anchor_scale_idxs = self.anchors_info['anchor_scale_idxs']
@@ -383,7 +471,7 @@ class DetectionDatasetBase(ABC, Dataset):
         # Shape of bboxes_cxcywh and bboxes_xyxy: (num_bboxes, 4)
         # bboxes_cxcywh and bboxes_xyxy should be in units of the input size (pixel)
         bboxes_xyxy = box_convert(
-            boxes = anno_info['boxes'].data, 
+            boxes = anno_info['boxes'], 
             in_fmt = anno_info['boxes'].format.value.lower(),
             out_fmt = 'xyxy'
         )
@@ -391,7 +479,6 @@ class DetectionDatasetBase(ABC, Dataset):
         # # Clamp to ensure all bboxes are within image 
         # bboxes_xyxy[:, ::2] = bboxes_xyxy[:, ::2].clamp(0, img_w)
         # bboxes_xyxy[:, 1::2] = bboxes_xyxy[:, 1::2].clamp(0, img_h)
-        
         bboxes_cxcywh = convert.xyxy_to_cxcywh(bboxes_xyxy)
 
         # Filter out objects that may have been too cut off due to transforms
@@ -402,8 +489,13 @@ class DetectionDatasetBase(ABC, Dataset):
         bboxes_xyxy = bboxes_xyxy[valid_mask]
         labels = labels[valid_mask]
 
+        if obj_weights is None:
+            obj_weights = torch.ones_like(labels) # Each object has P(object) = 1
+        else:
+            obj_weights = obj_weights[valid_mask]
+
         # Loop over objects in the image and assign them to an anchor/scale
-        for label, bbox_cxcywh, bbox_xyxy in zip(labels, bboxes_cxcywh, bboxes_xyxy):
+        for label, bbox_cxcywh, bbox_xyxy, obj_weight in zip(labels, bboxes_cxcywh, bboxes_xyxy, obj_weights):
             cx, cy, w, h = bbox_cxcywh
 
             cxcy = bbox_cxcywh[:2].repeat(num_tot_anchors, 1) # Shape: (num_tot_anchors, 2)
@@ -414,55 +506,58 @@ class DetectionDatasetBase(ABC, Dataset):
             # Assign Responsible Anchor Box
             # -------------------------------
             ious = evaluate.calc_ious(bbox_xyxy.unsqueeze(0), bbox_anchors).squeeze() # Shape: (num_tot_anchors,)
-            max_idx = ious.argmax(dim = -1).item()
-            scale_idx = anchor_scale_idxs[max_idx]
-            anchor_idx = max_idx - anchors_per_scale[:scale_idx].sum()
+            _, topk_idxs = ious.topk(k = 4)  # Only consider top 4 anchors for assignment
+            for topk_idx in topk_idxs:
+                scale_idx = anchor_scale_idxs[topk_idx]
+                anchor_idx = topk_idx - anchors_per_scale[:scale_idx].sum()
 
-            fmap_h, fmap_w = fmap_sizes[scale_idx] # Height, width of the fmap
-            stride_h, stride_w = self.strides[scale_idx] # Height, width of a fmap grid cell
-            anchor_w, anchor_h = self.scale_anchors[scale_idx][anchor_idx] # Width, height of responsible anchor
-            
-            # Note: Although all_cxcy < img_wh ensures bbox centers are within image bounds,
-                # due to integer division (i.e. flooring), grid indices (grid_x, grid_y) 
-                # can sometimes equal fmap size (fmap_w, fmap_h), causing out-of-bounds errors.
-            # Clamping to fmap_size - 1 ensures indices stay within valid feature map range ([0, fmap_size - 1]).
-            grid_x = min(int(cx / stride_w), fmap_w - 1)
-            grid_y = min(int(cy / stride_h), fmap_h - 1)
-
-            targ_x = (cx / stride_w) - grid_x # x-offset within the cell (in [0, 1])
-            targ_y = (cy / stride_h) - grid_y # y-offset within the cell (in [0, 1])
-
-            targ_w = torch.log(w / anchor_w) # normalized width in log-scale
-            targ_h = torch.log(h / anchor_h) # normalized height in log-scale
-
-            # The 1 in the last element indicates object presence
-            targ_bbox = torch.tensor([targ_x, targ_y, targ_w, targ_h, 1], dtype = torch.float32)
-            scale_targs[scale_idx][anchor_idx, grid_y, grid_x, :5] = targ_bbox
-
-            # One-hot encode the class label
-            scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 5 + label] = 1
-
-            # -------------------------------
-            # Assign Ignore Anchor Boxes
-            # -------------------------------
-            ignore_mask = (ious >= self.ignore_threshold)
-            ignore_mask[max_idx] = False
-            ignore_idxs = torch.where(ignore_mask)[0]
-
-            for ig_idx in ignore_idxs:
-                ig_scale_idx = anchor_scale_idxs[ig_idx]
-                ig_anchor_idx = ig_idx - anchors_per_scale[:ig_scale_idx].sum()
+                fmap_h, fmap_w = fmap_sizes[scale_idx] # Height, width of the fmap
+                stride_h, stride_w = self.strides[scale_idx] # Height, width of a fmap grid cell
+                anchor_w, anchor_h = self.scale_anchors[scale_idx][anchor_idx] # Width, height of responsible anchor
                 
-                ig_fmap_h, ig_fmap_w = fmap_sizes[ig_scale_idx]
-                ig_stride_h, ig_stride_w = self.strides[ig_scale_idx]
+                # Note: Although all_cxcy < img_wh ensures bbox centers are within image bounds,
+                    # due to integer division (i.e. flooring), grid indices (grid_x, grid_y) 
+                    # can sometimes equal fmap size (fmap_w, fmap_h), causing out-of-bounds errors.
+                # Clamping to fmap_size - 1 ensures indices stay within valid feature map range ([0, fmap_size - 1]).
+                grid_x = min(int(cx / stride_w), fmap_w - 1)
+                grid_y = min(int(cy / stride_h), fmap_h - 1)
 
-                ig_grid_x = min(int(cx / ig_stride_w), ig_fmap_w - 1)
-                ig_grid_y = min(int(cy / ig_stride_h), ig_fmap_h - 1)
-                                
-                # Object score of -1 implies ignore this cell during loss calculation
-                if scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] == 0:
-                    scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] = -1
-            
+                targ_x = (cx / stride_w) - grid_x # x-offset within the cell (in [0, 1])
+                targ_y = (cy / stride_h) - grid_y # y-offset within the cell (in [0, 1])
+
+                targ_w = torch.log(w / anchor_w) # normalized width in log-scale
+                targ_h = torch.log(h / anchor_h) # normalized height in log-scale
+
+                if scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 4] == 0:
+                    targ_bbox = torch.tensor([targ_x, targ_y, targ_w, targ_h, obj_weight], dtype = torch.float32)
+                    scale_targs[scale_idx][anchor_idx, grid_y, grid_x, :5] = targ_bbox
+
+                    # One-hot encode the class label
+                    # Note: I don't think I need to multiply by obj_weight, since this is P(class|object)
+                    scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 5 + label] = 1
+
+                    # -------------------------------
+                    # Assign Ignore Anchor Boxes
+                    # -------------------------------
+                    ignore_mask = (ious >= self.ignore_threshold)
+                    ignore_mask[topk_idx] = False
+                    ignore_idxs = torch.where(ignore_mask)[0]
+
+                    for ig_idx in ignore_idxs:
+                        ig_scale_idx = anchor_scale_idxs[ig_idx]
+                        ig_anchor_idx = ig_idx - anchors_per_scale[:ig_scale_idx].sum()
+                        
+                        ig_fmap_h, ig_fmap_w = fmap_sizes[ig_scale_idx]
+                        ig_stride_h, ig_stride_w = self.strides[ig_scale_idx]
+
+                        ig_grid_x = min(int(cx / ig_stride_w), ig_fmap_w - 1)
+                        ig_grid_y = min(int(cy / ig_stride_h), ig_fmap_h - 1)
+                                        
+                        # Object score of -1 implies ignore this cell during loss calculation
+                        if scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] == 0:
+                            scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] = -1
+
+                    break  # Once assigned, stop trying to assign
         return scale_targs
     
     @abstractmethod

@@ -48,10 +48,24 @@ class EMA():
             ema_buffer.copy_(base_buffer)
 
     def state_dict(self):
-        return self.ema_model.state_dict()
+        ema_state_dict = {
+            'model': self.ema_model.state_dict(),
+            'decay': self.decay
+        }
+        return ema_state_dict
 
-    def load_state_dict(self, state_dict):
-        self.ema_model.load_state_dict(state_dict)
+    def load_state_dict(self, ema_state_dict, load_decay = True):
+        '''
+        Load EMA model weights and optionally the decay factor.
+
+        Args:
+            ema_state_dict (dict): Dictionary containing 'model' (PyTorch state_dict) and optionally 'decay' (float).
+            load_decay (bool): Whether to load the decay value from `ema_state_dict`. 
+                               Requires 'decay' to be in `ema_state_dict`. Default is True.
+        '''
+        self.ema_model.load_state_dict(ema_state_dict['model'])
+        if load_decay:
+            self.decay = ema_state_dict['decay']
 
     def compile(self, **kwargs):
         self.ema_model.compile(**kwargs)

@@ -9,7 +9,7 @@ import json
 import random
 from PIL import Image
 from collections import defaultdict
-from typing import Optional, List, Union, Callable, Tuple
+from typing import Optional, List, Union, Callable, Tuple, Literal
 
 from src.utils import convert
 from src.data_setup import dataset_utils
@@ -57,10 +57,12 @@ class COCODataset(DetectionDatasetBase):
                  strides: List[Union[int, Tuple[int, int]]],
                  default_input_size: Union[int, Tuple[int, int]],
                  train: bool = True, 
-                 single_augs: Optional[Callable] = None,
-                 mosaic_augs: Optional[Callable] = None,
-                 mosaic_prob: float = 0.0,
                  ignore_threshold: float = 0.5,
+                 single_augs: Optional[Callable] = None,
+                 multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
+                 post_multi_augs: Optional[Callable] = None,
+                 multi_aug_prob: float = 0.0,
+                 mixup_alpha: float = 0.5,
                  min_box_scale: float = 0.01,
                  max_imgs: Optional[int] = None):
         self.train = train
@@ -87,8 +89,10 @@ class COCODataset(DetectionDatasetBase):
             default_input_size = default_input_size,
             ignore_threshold = ignore_threshold,
             single_augs = single_augs, 
-            mosaic_augs = mosaic_augs,
-            mosaic_prob = mosaic_prob, 
+            multi_augs = multi_augs,
+            post_multi_augs = post_multi_augs,
+            multi_aug_prob = multi_aug_prob, 
+            mixup_alpha = mixup_alpha,
             min_box_scale = min_box_scale
         )
 

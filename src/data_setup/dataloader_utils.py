@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import Sampler, RandomSampler, SequentialSampler
+from torch.utils.data import Sampler, RandomSampler
 
 import random, math
 from typing import List, Union, Tuple, Iterable, Optional, Literal
@@ -58,7 +58,9 @@ def get_dataloaders(
     strides: List[Union[int, Tuple[int, int]]],
     default_input_size: Union[int, Tuple[int, int]],
     ignore_threshold: float = 0.5,
-    mosaic_prob: float = 0.0,
+    multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
+    multi_aug_prob: float = 0.0,
+    mixup_alpha: float = 0.5,
     multiscale_interval: Optional[int] = None,
     multiscale_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None,
     max_imgs: Optional[Union[int, Tuple[int, int]]] = None,
@@ -96,8 +98,9 @@ def get_dataloaders(
                                   but have an IoU >= ignore_threshold, 
                                   will be marked with an encoded index of `-1` to indicate they should be ignored.
                                   Default value is 0.5. 
-        mosaic_prob (float): The probability that an image from the dataset's `__getitem__` function is a mosaic.
-                             This is only used for the training dataset. Default is 0.0.
+        multi_aug_prob (float): The probability that an image from the dataset's `__getitem__` function 
+                                uses a multi-image augmentation (e.g. mosaic or mixup).
+                                This is only used for the training dataset. Default is 0.0.
         multiscale_interval (optional, int): Batch interval to change input image size for multiscale training.
                                              If None, multiscale training is disabled. Default is None.
                                              If provided, the following are also required: `multiscale_sizes`.
@@ -131,7 +134,7 @@ def get_dataloaders(
 
     # Resizing and pixel rescaling for single images will be handled inside the dataset.
     train_single_augs = transforms.get_single_transforms(train = True, aug_only = True)
-    train_mosaic_augs = transforms.get_mosaic_transforms(aug_only = True)
+    train_post_multi_augs = transforms.get_post_multi_transforms(aug_only = True)
 
     test_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
     
@@ -145,14 +148,16 @@ def get_dataloaders(
     }
     train_dataset = dataset_class(train = True, 
                                   single_augs = train_single_augs,
-                                  mosaic_augs = train_mosaic_augs,
-                                  mosaic_prob = mosaic_prob,
+                                  post_multi_augs = train_post_multi_augs,
+                                  multi_augs = multi_augs,
+                                  multi_aug_prob = multi_aug_prob,
+                                  mixup_alpha = mixup_alpha,
                                   max_imgs = max_imgs[0],
                                   **common_dataset_kwargs)
 
     test_dataset = dataset_class(train = False, 
                                  single_augs = test_single_augs,
-                                 mosaic_prob = 0.0,
+                                 multi_aug_prob = 0.0,
                                  max_imgs = max_imgs[1],
                                  **common_dataset_kwargs)
 

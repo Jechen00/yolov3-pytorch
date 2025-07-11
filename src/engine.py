@@ -259,17 +259,17 @@ def train(
     # -------------------------
     # Set-up
     # -------------------------
-    if not hasattr(train_builder.dataset, 'mosaic_prob'):
+    if not hasattr(train_builder.dataset, 'multi_aug_prob'):
         raise AttributeError(
-            'The dataset in `train_builder` must have a `mosaic_prob` attribute '
-            'to support disabling mosaic augmentations.'
+            'The dataset in `train_builder` must have a `multi_aug_prob` attribute '
+            'to support disabling multi-image augmentations.'
         )
     
-    # Determine what epoch to end mosaic augmentations at, if being used
-    if te_cfgs.mosaic_end_epoch is not None:
-        mosaic_end_epoch = te_cfgs.mosaic_end_epoch
-    else:
-        mosaic_end_epoch = int(0.9 * te_cfgs.num_epochs) # Disable in last 10%
+    if te_cfgs.multi_aug_decay_range is not None:
+        orig_multi_aug_prob = train_builder.dataset.multi_aug_prob
+        assert te_cfgs.multi_aug_decay_range[1] > te_cfgs.multi_aug_decay_range[0], (
+            '`multi_aug_decay_range` must be in the form (start_epoch, end_epoch) where `end_epoch > start_epoch`'
+        )
 
     # Build dataloaders for training and validation dataset
     train_loader = train_builder.build()
@@ -333,15 +333,26 @@ def train(
         # -------------------------
         train_start = time.time()
 
-        # Determine if mosaic augmentation should be disabled
-        if (epoch >= mosaic_end_epoch) and (train_builder.dataset.mosaic_prob > 0):
-            train_builder.dataset.mosaic_prob = 0 # Set mosaic_prob to 0 in the main dataset
+        # Determine if multi-image augmentation probability should decay
+        decay_multi_aug_prob = (
+            (te_cfgs.multi_aug_decay_range is not None) and
+            (epoch >= te_cfgs.multi_aug_decay_range[0]) and 
+            (train_builder.dataset.multi_aug_prob > 0)
+        )
+        if decay_multi_aug_prob:
+            # The range of decay is [multi_aug_decay_range[0], multi_aug_decay_range[1])
+            range_diff = te_cfgs.multi_aug_decay_range[1] - te_cfgs.multi_aug_decay_range[0]
+            decay_progress = ((epoch + 1) - te_cfgs.multi_aug_decay_range[0]) / range_diff
+            multi_aug_prob = max(0, orig_multi_aug_prob * (1 - decay_progress))
+
+            train_builder.dataset.multi_aug_prob = multi_aug_prob # Change multi_aug_prob in the main dataset
+            print(f'{BOLD_START}[NOTE]{BOLD_END} '
+                  f'Multi-image augmentation probability updated to {multi_aug_prob:.3f}')
 
             if train_loader.persistent_workers:
                 # If persistent_workers = True, rebuild the dataloader
-                # This ensures each worker uses the updated mosaic_prob prob attribute of the dataset
+                # This ensures each worker uses the updated multi_aug_prob attribute of the dataset
                 train_loader = train_builder.build()
-            print(f'{BOLD_START}[NOTE]{BOLD_END} Mosaic augmentation has been disabled from this point forward.')
 
         # Compute average losses over batches, while updating models
         train_avgs = yolov3_train_step(
@@ -487,9 +498,12 @@ class TrainEvalConfigs():
                                                       Default is None.
         strides (optional, List[Tuple[int, int]]): List of strides (height, width) corresponding to 
                                                    each scale of the model (as well as in `scale_anchors`). Default is None.
-        mosaic_end_epoch (optional, int): The epoch to disable mosaic augmentation at, if being used during training. 
-                                          If not provided, mosaic augmentation is disabled in the last 10% of epochs (0.9 * num_epochs). 
-                                          Default is None.
+        multi_aug_decay_range (optional, Tuple[int, int]): The epoch range (start_epoch, end_epoch) 
+                                                           in which to decay multi-image augmentation probability.
+                                                           Note that this is a half-open interval, where decay starts at `start_epoch`
+                                                           and reaches probability = 0 by `end_epoch - 1`.
+                                                           Only used if multi-image augmentations are applied during training.
+                                                           If not provided, multi-image augmentation probability never decays. Default is None.
         obj_threshold (optional, float): Threshold to filter out low predicted object probabilities, i.e. P(object). 
                                          Used during evaluation when computing mAP/mAR. Default is None.
         nms_threshold (optional, float): The IoU threshold used during evaluation when performing NMS for mAP/mAR. Default is None.
@@ -508,7 +522,7 @@ class TrainEvalConfigs():
     eval_start_epoch: int = 0
     scale_anchors: Optional[List[torch.Tensor]] = None
     strides: Optional[List[Tuple[int, int]]] = None
-    mosaic_end_epoch: Optional[int] = None
+    multi_aug_decay_range: Optional[Tuple[int, int]] = None
     obj_threshold: Optional[float] = None
     nms_threshold: Optional[float] = None
     map_thresholds: Optional[List[float]] = None
