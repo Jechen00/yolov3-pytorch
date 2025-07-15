@@ -30,8 +30,13 @@ class EMA():
         # Initalize any lazy layers
         device = next(base_model.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
+
+        orig_training = base_model.training
+        base_model.eval()
         with torch.no_grad():
             _ = base_model(dummy_X)
+        if orig_training:
+            base_model.train()
 
         # Copy base_model for EMA base and disable gradients
         self.ema_model = copy.deepcopy(base_model)

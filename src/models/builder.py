@@ -299,8 +299,13 @@ class YOLOv3(nn.Module):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
+        
+        orig_training = self.training
+        self.eval() 
         with torch.no_grad():
             scale_logits = self.forward(dummy_X)
+        if orig_training:
+            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
@@ -323,8 +328,13 @@ class YOLOv3(nn.Module):
         '''
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
+
+        orig_training = self.training
+        self.eval() 
         with torch.no_grad():
             _ = self.forward(dummy_X) # Initalize lazy layers
+        if orig_training:
+            self.train()
 
         for module in self.detector.modules():
             if isinstance(module, nn.Conv2d):
@@ -410,8 +420,13 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
+        
+        orig_training = self.training
+        self.eval() 
         with torch.no_grad():
             scale_logits = self.forward(dummy_X)
+        if orig_training:
+            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
