@@ -4,7 +4,7 @@ This project uses the PyTorch framework to implement the YOLOv3 architecture, al
 ## Project Overview
 <p align = 'center'>
   <img src = 'images/yolov3_sheep_demo.png' alt = 'YOLOv3 Sheep Demo' width = '46%'/>
-  <img src = 'images/yolov3_bird_demo.png' alt = 'YOLOv3 Bird Demo' width = '52%'/>
+  <img src = 'images/yolov3_duck_demo.png' alt = 'YOLOv3 Duck Demo' width = '52%'/>
 </p>
 
 The third iteration of the _You Only Look Once_ model, YOLOv3, was proposed by [Redmon & Farhadi (2018)](#references) and presents several architectural improvements over its predecessors: YOLOv2 [(Redmon & Farhadi 2016)](#references) and YOLOv1 [(Redmon et al. 2016)](#references). It introduces a more powerful backbone called _DarkNet-53_, which is comprised of deeper layers with batch normalization and interwoven residual connections for better feature extraction. Moreover, YOLOv3's detector now includes a _feature pyramid network (FPN)_, enabling predictions at three different scales — large, medium, and small — to improve detection across a range of object sizes.

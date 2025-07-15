@@ -124,7 +124,7 @@ def draw_preds_yolov3(
         ax.add_patch(rect)
         
         if show_probs:
-            txt_str = f'{name.capitalize()}; {pred_res["scores"][i]:.2f}'
+            txt_str = f'{name.capitalize()}: {pred_res["scores"][i]:.2f}'
         else:
             txt_str = name.capitalize()
 
