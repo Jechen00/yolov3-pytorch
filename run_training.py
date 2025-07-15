@@ -8,7 +8,7 @@ import os
 import yaml
 import argparse
 
-from src.models import builder
+from src.models import builder, ema_model
 from src.utils import constants, misc
 from src.data_setup import dataloader_utils
 from src import loss, schedulers, engine
@@ -47,32 +47,48 @@ if __name__ == '__main__':
     
     
     # ---------------------------
-    # Model
+    # Base and EMA Model
     # ---------------------------
-    model_cfgs = configs['model']
+    base_model_cfgs = configs['base_model']
+    ema_cfgs = configs['ema']
 
     # Using DarkNet53 backbone, as per YOLOv3 paper
-    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = model_cfgs['backbone_cfgs'])
-    darknet53_backbone.load_weights_file(weights_file = model_cfgs['backbone_weights'], 
-                                        input_shape = tuple(model_cfgs['input_shape']))
+    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfgs['backbone_cfgs'])
+    if base_model_cfgs['backbone_weights'] is not None:
+        darknet53_backbone.load_weights_file(weights_file = base_model_cfgs['backbone_weights'], 
+                                            input_shape = tuple(base_model_cfgs['input_shape']))
 
-    model = builder.YOLOv3(backbone = darknet53_backbone, detector_cfgs = model_cfgs['detector_cfgs'])
+    base_model = builder.YOLOv3(backbone = darknet53_backbone, 
+                                detector_cfgs = base_model_cfgs['detector_cfgs'])
+
+    if ema_cfgs['use_ema']:
+        ema = ema_model.EMA(base_model = base_model, 
+                            decay = ema_cfgs['decay'], 
+                            input_shape = tuple(base_model_cfgs['input_shape']))
+    else:
+        ema = None
 
     # Device will be CUDA or MPS if they are avaliable (Change if needed)
     if device.type == 'cuda':
-        model.compile(dynamic = True)
-    model = model.to(device)
+        base_model.compile(dynamic = True)
 
-    scale_anchors, strides, _ = model.infer_scale_info(model_cfgs['input_shape'])
+        if ema_cfgs['use_ema']:
+            ema.compile(dynamic = True)
+
+    base_model = base_model.to(device)
+    if ema_cfgs['use_ema']:
+        ema.to(device)
+
+    scale_anchors, strides, _ = base_model.infer_scale_info(base_model_cfgs['input_shape'])
 
 
-    # ---------------------------
-    # Dataloader (Pascal VOC)
-    # ---------------------------
+    # -------------
+    # Dataloader
+    # -------------
     train_builder, val_builder = dataloader_utils.get_dataloaders(
         scale_anchors = scale_anchors,
         strides = strides,
-        default_input_size = model_cfgs['input_shape'][-1],
+        default_input_size = base_model_cfgs['input_shape'][-1],
         return_builders = True,
         device = device,
         **configs['dataloader']
@@ -89,7 +105,7 @@ if __name__ == '__main__':
     )
 
     optimizer = optim.SGD(
-        model.parameters(),
+        base_model.parameters(),
         **configs['optimizer']
     )
 
@@ -119,12 +135,13 @@ if __name__ == '__main__':
     # Run Training
     # ---------------------------
     train_losses, val_losses, eval_history = engine.train(
-        model = model,
+        base_model = base_model,
         train_builder = train_builder,
         val_builder = val_builder,
         loss_fn = loss_fn,
         optimizer = optimizer,
         scheduler = scheduler,
+        ema = ema,
         te_cfgs = te_cfgs,
         ckpt_cfgs = ckpt_cfgs,
         device = device
