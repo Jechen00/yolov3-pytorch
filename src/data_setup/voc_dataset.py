@@ -47,16 +47,53 @@ VOC_DATA_URLS = {
 #####################################
 class VOCDataset(DetectionDatasetBase):
     '''
+    Pascal VOC training and validation/test dataset.
+
     The training set combines the trainval data from  Pascal VOC 2007 and 2012. 
     The validation/test set is the test data from Pascal VOC 2007.
-    
-    Dataset based on https://docs.pytorch.org/vision/main/_modules/torchvision/datasets/voc.html#VOCDetection
+
+    Args:
+        root (str): The directory to download the dataset to, if needed.
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
+                                            Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                            the (width, height) of the anchor in units of the input size (pixels).
+        strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale of the model.
+                                                     If an element is a `tuple`, it should refer to the strides for (height, width).
+                                                     If an element is an `int`, it is assumed that the stride 
+                                                     is the same for height and width.
+        default_input_size (Union[int, Tuple[int, int]]): Default input size used to resize images in `__getitem__` 
+                                                          when no specific size is provided.
+                                                          If a `tuple`, it should be (height, width). 
+                                                          If an `int`, it is assumed to be square.
+        train (bool): Whether to construct the training dataset or the validation/testing dataset.
+        ignore_threshold (float): IoU threshold used during target encoding to determine which anchors should be ignored.
+                                  Anchors with an IoU greater than `ignore_threshold`, but are not the best matching anchor for an object 
+                                  will be ignored in loss calculations (they are not treated as negatives and have P(object) = -1).
+                                  Default is 0.5.
+        single_augs (optional, Callable): Data augmentations to apply to the image in `__getitem__` 
+                                          when only a single image is returned (i.e., no multi-image augmentations).
+        multi_augs (Literal['mosaic', 'mixup'] or List[Literal['mosaic', 'mixup']]): 
+                        The type(s) of multi-image augmentation to apply when combining images in `__getitem__`. 
+                        If a string is passed (e.g., `'mosaic'` or `'mixup'`), that augmentation is always applied.  
+                        If a list is passed (e.g. ['mosaic', 'mixup']), one augmentation is uniformly sampled 
+                        each time a multi-image augmentation is applied. Default is 'mosaic'.
+        post_multi_augs (optional, Callable): Data augmentation to apply after a multi-image augmentation is performed.
+        multi_aug_prob (float): The probability of applying a multi-image augmentation. Default is 0.0 (no multi-image augmentations).
+        mixup_alpha (float): Alpha parameter used for the Beta(alpha, alpha) distribution in mix-up augmentations. Default is 1.0.
+        min_box_scale (float): Minimum relative size (height and width) for a bounding box to be considered valid during target encoding. 
+                               This is with respect to the input image size.
+                               For example, if the input image size is (416, 416) and `min_box_scale = 0.01`, 
+                               the minimum height and width for valid bounding boxes is 416*0.01 = 4.16 pixels.
+                               Default is 0.01.
+        max_imgs (optional, int): The maximum number of images to include in the dataset. 
+                                  If provided, the images are randomly sampled from the full dataset.
+                                  If not provided, all available images are included.
     '''
     def __init__(self, 
                  root: str, 
                  scale_anchors: List[torch.Tensor],
                  strides: List[Union[int, Tuple[int, int]]],
-                 default_input_size: Union[int, Tuple[int, int]],
+                 default_input_size: Union[int, Tuple[int, int]] = (416, 416),
                  train: bool = True, 
                  ignore_threshold: float = 0.5,
                  single_augs: Optional[Callable] = None,
@@ -145,20 +182,35 @@ class VOCDataset(DetectionDatasetBase):
     
     def get_img(self, idx: int) -> Image.Image:
         '''
-        Loads an image from the dataset (pre-transform).
+        Loads an original image from the dataset and converts it to RGB format
+
+        Args:
+            idx (int): Index of the image in the dataset.
+
+        Returns:
+            Image.Image: The original image in RGB format,
+                          before any additional transforms are applied.
         '''
         return Image.open(self.img_paths[idx]).convert('RGB')
     
     def get_anno_info(self, idx: int) -> dict:
         '''
-        Parses the annotation XML file for the given index to retrieve 
-        object labels and bounding box information (pre-transform).
+        Parses the annotation XML file for a given index to retrieve 
+        annotation information (labels and bounding boxes) for 
+        the original, untransformed image in the dataset.
+
+        Args:
+            idx (int): Index of the image in the dataset.
 
         Returns:
-            info_dict (dict): A dictionary containing:
-                                - labels (torch.Tensor): Class indices for each object in the image.
-                                - boxes (BoundingBoxes): Bounding boxes in (x_min, y_min, x_max, y_max) format,
-                                                         scaled to the original image size.
+            Dict[str, Any]: Annotation dictionary for the original image at index `idx`,
+                            before any additional transforms are applied. It consists of the keys:
+                                - labels (torch.Tensor): Tensor of label indices for each object. 
+                                                            Shape is (num_objects,).
+                                - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
+                                                            in XYXY format and in pixel units 
+                                                            (canvas is the image size). 
+                                                            Shape is (num_objects, 4).
         '''
         xml_root = ET.parse(self.anno_paths[idx]).getroot()
         size = xml_root.find('size')

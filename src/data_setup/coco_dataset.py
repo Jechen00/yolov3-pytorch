@@ -9,7 +9,7 @@ import json
 import random
 from PIL import Image
 from collections import defaultdict
-from typing import Optional, List, Union, Callable, Tuple, Literal
+from typing import Optional, List, Union, Callable, Tuple, Literal, Dict, Any
 
 from src.utils import convert
 from src.data_setup import dataset_utils
@@ -37,25 +37,54 @@ COCO_2014_URLS = {
 #####################################
 class COCODataset(DetectionDatasetBase):
     '''
-    input_size (int or Tuple[int, int]): Height and width used to resize images to meet model input expectations.
-                                         If `int`, the resized image is assumed to be square.
-    scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
-                                        Each element has shape: (num_anchors, 2), where the last dimension gives 
-                                        the (width, height) of the anchor in units of the input size (pixels).
-    strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale in `scale_anchors`. 
-                                                    Each stride represents the downsampling factor between the input image 
-                                                    and the feature map at that scale.
-    ignore_threshold (float): The IoU threshold used to encode which anchor boxes will be ignored during loss calculation.
-                                Anchor boxes that do not have the highest IoU with a ground truth box, 
-                                but have an IoU >= ignore_threshold, 
-                                will be marked with an encoded index of `-1` to indicate they should be ignored.
-                                Default value is 0.5.
+    MS COCO training and validation/testing dataset.
+
+    The training set consists of all ~82.8k images from the MS COCO 2014 training set (train2014), 
+    along with ~35.5k images from the MS COCO 2014 validation set (val2014).
+    The validation/testing set consists of the remaining ~5k images from val2014.
+
+    Args:
+        root (str): The directory to download the dataset to, if needed.
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
+                                            Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                            the (width, height) of the anchor in units of the input size (pixels).
+        strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale of the model.
+                                                     If an element is a `tuple`, it should refer to the strides for (height, width).
+                                                     If an element is an `int`, it is assumed that the stride 
+                                                     is the same for height and width.
+        default_input_size (Union[int, Tuple[int, int]]): Default input size used to resize images in `__getitem__` 
+                                                          when no specific size is provided.
+                                                          If a `tuple`, it should be (height, width). 
+                                                          If an `int`, it is assumed to be square.
+        train (bool): Whether to construct the training dataset or the validation/testing dataset.
+        ignore_threshold (float): IoU threshold used during target encoding to determine which anchors should be ignored.
+                                  Anchors with an IoU greater than `ignore_threshold`, but are not the best matching anchor for an object 
+                                  will be ignored in loss calculations (they are not treated as negatives and have P(object) = -1).
+                                  Default is 0.5.
+        single_augs (optional, Callable): Data augmentations to apply to the image in `__getitem__` 
+                                          when only a single image is returned (i.e., no multi-image augmentations).
+        multi_augs (Literal['mosaic', 'mixup'] or List[Literal['mosaic', 'mixup']]): 
+                        The type(s) of multi-image augmentation to apply when combining images in `__getitem__`. 
+                        If a string is passed (e.g., `'mosaic'` or `'mixup'`), that augmentation is always applied.  
+                        If a list is passed (e.g. ['mosaic', 'mixup']), one augmentation is uniformly sampled 
+                        each time a multi-image augmentation is applied. Default is 'mosaic'.
+        post_multi_augs (optional, Callable): Data augmentation to apply after a multi-image augmentation is performed.
+        multi_aug_prob (float): The probability of applying a multi-image augmentation. Default is 0.0 (no multi-image augmentations).
+        mixup_alpha (float): Alpha parameter used for the Beta(alpha, alpha) distribution in mix-up augmentations. Default is 1.0.
+        min_box_scale (float): Minimum relative size (height and width) for a bounding box to be considered valid during target encoding. 
+                               This is with respect to the input image size.
+                               For example, if the input image size is (416, 416) and `min_box_scale = 0.01`, 
+                               the minimum height and width for valid bounding boxes is 416*0.01 = 4.16 pixels.
+                               Default is 0.01.
+        max_imgs (optional, int): The maximum number of images to include in the dataset. 
+                                  If provided, the images are randomly sampled from the full dataset.
+                                  If not provided, all available images are included.
     '''
     def __init__(self, 
                  root: str, 
                  scale_anchors: List[torch.Tensor],
                  strides: List[Union[int, Tuple[int, int]]],
-                 default_input_size: Union[int, Tuple[int, int]],
+                 default_input_size: Union[int, Tuple[int, int]] = (416, 416),
                  train: bool = True, 
                  ignore_threshold: float = 0.5,
                  single_augs: Optional[Callable] = None,
@@ -71,11 +100,11 @@ class COCODataset(DetectionDatasetBase):
         if train:
             data_keys = ['train2014', 'val2014', 'anno2014']
             part_file = os.path.join(root, 'trainvalno5k.part') # Path to partition file
-            display_name = 'MS-COCO 2014 TrainVal35K'
+            display_name = 'MS COCO 2014 TrainVal35K'
         else:
             data_keys = ['val2014', 'anno2014']
             part_file = os.path.join(root, '5k.part') # Path to partition file
-            display_name = 'MS-COCO 2014 Val5K'
+            display_name = 'MS COCO 2014 Val5K'
         label_path = os.path.join(root, 'coco.names') # Path to COCO class labels
 
         # Initialize base detection dataset attributes 
@@ -139,21 +168,61 @@ class COCODataset(DetectionDatasetBase):
 
     def get_img(self, idx: int) -> Image.Image:
         '''
-        Loads an image from the dataset (pre-transform).
+        Loads an original image from the dataset and converts it to RGB format
+
+        Args:
+            idx (int): Index of the image in the dataset.
+
+        Returns:
+            Image.Image: The original image in RGB format,
+                          before any additional transforms are applied.
         '''
         img_file = self.img_paths[idx]
         return Image.open(img_file).convert('RGB')
     
-    def get_anno_info(self, idx: int) -> dict:
+    def get_anno_info(self, idx: int) -> Dict[str, Any]:
         '''
-        Loads annotation information (labels and bounding boxes)
-        for an image from the dataset (pre-transform).
+        Loads the annotation information (labels and bounding boxes)
+        for an original image, untransformed image in the dataset.
+
+        Args:
+            idx (int): Index of the image in the dataset.
+
+        Returns:
+            Dict[str, Any]: Annotation dictionary for the original image at index `idx`,
+                            before any additional transforms are applied. It consists of the keys:
+                                - labels (torch.Tensor): Tensor of label indices for each object. 
+                                                            Shape is (num_objects,).
+                                - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
+                                                            in XYXY format and in pixel units 
+                                                            (canvas is the image size). 
+                                                            Shape is (num_objects, 4).
         '''
         img_file = self.img_paths[idx]
         filename = os.path.basename(img_file)
         return  self.filename_to_annos[filename]
         
-    def _load_annotations(self, data_keys: List[str]):
+    def _load_annotations(self, data_keys: List[Literal['train2014', 'val2014']]) -> Dict[str, Dict[str, Any]]:
+        '''
+        Loads and formats annotation information from MS COCO 2014 JSON files for the specified subsets.
+
+        Args: 
+            data_keys (List[Literal['train2014', 'val2014']]):
+                 List of dataset keys specifying which MS COCO 2014 annotation files to load.
+                    - training set: annotations are loaded from train2014 (~82.8k images) and val2014 (~35.5k images).
+                    - validation/testing set: annotations are loaded from only val2014 (remaining ~5k images)
+
+        Returns:
+            filename_to_annos (Dict[str, Dict[str, Any]]): Dictionary mapping image file names (e.g. 'COCO_val2014_000000391895.jpg') 
+                                                           to their annotation dictionaries.
+                                                           Each annotation dictionary consists of the following keys:
+                                                                - labels (torch.Tensor): Tensor of label indices for each object. 
+                                                                                         Shape is (num_objects,).
+                                                                - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
+                                                                                         in XYXY format and in pixel units 
+                                                                                         (canvas is the image size). 
+                                                                                         Shape is (num_objects, 4).
+        '''
         filename_to_annos = defaultdict(list)
         filename_to_size = {}
         for key in data_keys:

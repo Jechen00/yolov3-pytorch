@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import Sampler, RandomSampler
 
 import random, math
-from typing import List, Union, Tuple, Iterable, Optional, Literal
+from typing import List, Union, Tuple, Iterable, Optional, Literal, Iterator
 
 from src.data_setup import coco_dataset, voc_dataset, transforms
 from src.utils import misc
@@ -29,7 +29,7 @@ def yolov3_collate_fn(batch: List[tuple]):
 
     Args:
         batch (List[tuple]): A list of length `batch_size` containing tuples from the `__getitem__` of a `Dataset`.
-                            Each tuple should have 2 elements:
+                             Each tuple should have 2 elements:
                                 - `imgs` (torch.Tensor): The input image of shape (num_channels, height, width)
                                 - `scale_targs` (List[torch.Tensor]): List of target tensors, one per scale of the model.
                                                                       Each has shape (num_anchors, fmap_h, fmap_w, 5 + C)
@@ -70,22 +70,23 @@ def get_dataloaders(
     return_builders = True
 ) -> Union[Tuple[DataLoader, DataLoader], Tuple[DataLoaderBuilder, DataLoaderBuilder]]:
     '''
-    Creates training and validation/testing dataloaders 
-    for MS-COCO (`dataset_name = 'coco'`) or Pascal VOC (`dataset_name = 'voc'`).
+    Creates training and validation/testing dataloaders for a dataset in DATASETS.
+    
     If `dataset_name = 'coco'`:
-        The training set uses full train2014 MS-COCO dataset and ~35k images from the val2014 MS-COCO dataset.
-        The validation/test set uses ~5k images from the val2014 MS-COCO dataset.
+        The training set uses full train2014 MS COCO dataset and ~35k images from the val2014 MS COCO dataset.
+        The validation/test set uses ~5k images from the val2014 MS COCO dataset.
     If `dataset_name = 'voc'`:
         The training set combines the trainval data from  Pascal VOC 2007 and 2012. 
         The validation/test set is the test data from Pascal VOC 2007.
 
     Args:
-        root (str): Path to download datasets.
-        dataset_name ('coco' or 'voc'): The dataset to use for the dataloaders.
+        root (str): Path to download datasets, if needed.
+        dataset_name (str): Dataset key indicating which dataset to use for the dataloaders. 
+                            Must be a key from DATASETS.
         batch_size (int): Size used to split the datasets into batches.
         num_workers (int): Number of workers to use for multiprocessing. Default is 0.
         device (torch.device or str): The device expected to conduct training on. Default is 'cpu'.
-        scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each detection scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in unit of the input size (pixels).
         strides (List[Union[int, Tuple[int, int]]]): List of strides corresponding to each scale in `scale_anchors`. 
@@ -96,14 +97,14 @@ def get_dataloaders(
         ignore_threshold (float): The IoU threshold used to encode which anchor boxes will be ignored during loss calculation.
                                   Anchor boxes that do not have the highest IoU with a ground truth box, 
                                   but have an IoU >= ignore_threshold, 
-                                  will be marked with an encoded index of `-1` to indicate they should be ignored.
+                                  will be marked with `P(object) = -1` to indicate they should be ignored.
                                   Default value is 0.5. 
         multi_aug_prob (float): The probability that an image from the dataset's `__getitem__` function 
                                 uses a multi-image augmentation (e.g. mosaic or mixup).
-                                This is only used for the training dataset. Default is 0.0.
+                                This is only used for the training dataset. Default is 0.0 (no multi-image augmentations)
         multiscale_interval (optional, int): Batch interval to change input image size for multiscale training.
-                                             If None, multiscale training is disabled. Default is None.
                                              If provided, the following are also required: `multiscale_sizes`.
+                                             If None, multiscale training is disabled. Default is None.
         multiscale_sizes (optional, List[Union[int, Tuple[int, int]]]): List of input sizes to use during multiscale training.
                                                                         Elements can be ints (assumed square) or (H, W) tuples.
                                                                         Example: [320, (416, 416), 608]. Default is None.
@@ -224,24 +225,66 @@ def get_dataloaders(
 # Classes
 #####################################
 class DataLoaderBuilder():
+    '''
+    A builder used to easily reproduce a DataLoader, given a dataset and kwyword arguments.
+    
+    Args:
+        dataset (Dataset): The dataset to use for the dataloader.
+        dataloader_kwargs (dict): Dictionary of keyword arguments to pass to the DataLoader when building it.
+    '''
     def __init__(self, dataset: Dataset, dataloader_kwargs: dict):
         self.dataset = dataset
         self.dataloader_kwargs = dataloader_kwargs
 
     def build(self) -> DataLoader:
+        '''
+        Builds the dataloader for `dataset` using arguments from `dataloader_kwargs`.
+
+        Returns:
+            DataLoader: The dataloader for `dataset`.
+        '''
         return DataLoader(dataset = self.dataset, **self.dataloader_kwargs)
     
 
 class MultiScaleBatchSampler(Sampler):
     '''
-    From: https://github.com/CaoWGG/multi-scale-training/blob/master/batch_sampler.py
+    Batch sampler with optional multiscale training for object detection models.
+    At each iteration, this sampler yields a list of `(samp_idx, input_size)` pairs,
+    where `input_size` may change every `multiscale_interval` batches if enabled.
+
+    Adapted from: https://github.com/CaoWGG/multi-scale-training/blob/master/batch_sampler.py
+
+    Args:
+        sampler (Union[Sampler[int], Iterable[int]]): Base sampler (e.g., RandomSampler or SequentialSampler)
+                                                      used to sample image indices.
+        dataset (Datset): The dataset of which image indices will be sampled from.
+        batch_size (int): Number of sample images per batch.
+        default_input_size (Union[int, Tuple[int, int]]): The input size assigned to all batches 
+                                                          if multiscale training is disabled (`multiscale_interval` is not provided).
+                                                          If multiscale training is enabled (`multiscale_interval` is provided),
+                                                          only the inital batches of the iterator are assigned `default_input_size`,
+                                                          and the rest are assigned sizes randomly sampled from `multi_scale_sizes`.
+        drop_last (bool): Whether to drop the last remaining samples in a dataset if 
+                          they cannot create a full batch of size `batch_size`.
+                          If False, the final batch may have size <= `batch_size` ,
+                          increasing the total number of batches by at most one.
+                          Default is False.
+        multiscale_interval (optional, int): Batch interval to change input image size for multiscale training.
+                                             If provided, the following are also required: `multiscale_sizes`.
+                                             If None, multiscale training is disabled and all batches are assigned `default_input_size`. 
+                                             Default is None.
+        multiscale_sizes (optional, List[Union[int, Tuple[int, int]]]): List of input sizes to use during multiscale training.
+                                                                        Elements can be ints (assumed square) or (H, W) tuples.
+                                                                        Note: for YOLO-style models, 
+                                                                        these input sizes should be divisible by 32.
+                                                                        Example: [320, (416, 416), 608]. Default is None.
     '''
     def __init__(
         self,
         sampler: Union[Sampler[int], Iterable[int]],
         dataset: Dataset,
         batch_size: int,
-        default_input_size: Union[int. Tuple[int, int]],
+        default_input_size: Union[int, Tuple[int, int]],
         drop_last: bool = False,
         multiscale_interval: Optional[int] = None,
         multiscale_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None
@@ -255,11 +298,22 @@ class MultiScaleBatchSampler(Sampler):
         self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
-        self.default_input_size = default_input_size
+        self.default_input_size = misc.make_tuple(default_input_size)
         self.multiscale_interval = multiscale_interval
-        self.multiscale_sizes = multiscale_sizes
+        self.multiscale_sizes = [misc.make_tuple(size) for size in multiscale_sizes]
         
-    def __iter__(self):
+    def __iter__(self) -> Iterator[List[Tuple[int, Tuple[int, int]]]]:
+        '''
+        Creates an iterator that yields batches of `(samp_idx, input_size)` pairs.
+        Provides optional multiscale training by changing `input_size` every `multiscale_interval` batches.
+
+        Yields:
+            batch (List[Tuple[int, Tuple[int, int]]]): 
+                A list of (samp_idx, input_size) pairs.
+                    - samp_idx (int): Index of the image sample in the dataset.
+                    - input_size (Tuple[int, int]): A tuple (height, width) indicating 
+                                                    the input size of the batch.
+        '''
         batch = []
         num_batches = 0
         input_size = self.default_input_size
@@ -287,7 +341,10 @@ class MultiScaleBatchSampler(Sampler):
         if (not self.drop_last) and (len(batch) > 0):
             yield batch # Yields the last batch, even if it is shorter than batch_size
             
-    def __len__(self):
+    def __len__(self) -> int:
+        '''
+        Gets the number of batches in the dataset.
+        '''
         if not self.drop_last:
             return math.ceil(len(self.sampler) / self.batch_size)
         else:
