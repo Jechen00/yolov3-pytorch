@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision.ops import batched_nms
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
-from typing import List, Optional, Union, Tuple, Literal
+from typing import List, Optional, Union, Tuple, Literal, Dict, Any
 
 from src import postprocess
 from src.utils import convert
@@ -37,6 +37,43 @@ def bbox_area(bboxes: torch.Tensor) -> torch.Tensor:
     bbox_widths = (bboxes[..., 2] - bboxes[..., 0]).clamp(min = 0) # Width is x_max - x_min
     bbox_heights = (bboxes[..., 3] - bboxes[..., 1]).clamp(min = 0) # Height is y_max - y_min
     return bbox_widths * bbox_heights
+
+def calc_ious_wh(bbox_whs_1: torch.Tensor, 
+                 bbox_whs_2: torch.Tensor, 
+                 elementwise: bool = False) -> torch.Tensor:
+    '''
+    Computes Intersection over Union (IoU) between two set of bounding boxes,
+    given only their widths and heights (i.e. assumes the bounding boxes have the same centers).
+    
+    Args:
+        bbox_whs_1 (torch.Tensor): Tensor of shape (..., num_bboxes1, 2)
+                                   containing the first set of bounding box widths and heights.
+        bbox_whs_2 (torch.Tensor): Tensor of shape (..., num_bboxes2, 2)
+                                   containing the second set of bounding box widths and heights.
+        elementwise (bool): Whether to calculate IoUs element-wise (1:1), or pairwise (all combinations).
+                            If True, `bbox_whs_1` and `bbox_whs_2` must have the same shape.
+        
+    Returns:
+        ious (torch.Tensor): IoU values. If `elementwise = False`, shape is (..., num_bboxes1, num_bboxes2), 
+                             where the entry at [i, j] gives the IoU between the i-th box in `bbox_whs_1`
+                             and j-th box in `bbox_whs_2`. If `elementwise = True`, shape is (..., num_bboxes1),
+                            where the i-th entry gives the IoU between the i-th boxes of `bbox_whs_1` and` bbox_whs_2`.
+    '''
+    if elementwise:
+        assert bbox_whs_1.shape == bbox_whs_2.shape, (
+            'If `elementwise = True`, `bbox_whs_1` and `bbox_whs_2` must have the same shape.'
+        )
+        
+        bbox_whs_1 = bbox_whs_1[..., :2] # Shape: (..., num_bboxes1, 2)
+        bbox_whs_2 = bbox_whs_2[..., :2] # Shape: (..., num_bboxes2, 2)
+    else:
+        bbox_whs_1 = bbox_whs_1[..., :, None, :2] # Shape: (..., num_bboxes1, 1, 2)
+        bbox_whs_2 = bbox_whs_2[..., None, :, :2] # Shape: (..., 1, num_bboxes2, 2)
+
+    inter_areas = torch.min(bbox_whs_1, bbox_whs_2).clamp(min = 0).prod(dim = -1)
+    union_areas = bbox_whs_1.prod(dim = -1) + bbox_whs_2.prod(dim = -1) - inter_areas
+
+    return inter_areas / (union_areas + 1e-7) # Shape: (num_bboxes1, num_bboxes_2)
 
 def calc_ious(
     bboxes1: torch.Tensor, 
@@ -78,7 +115,7 @@ def calc_ious(
     
     if elementwise:
         assert bboxes2.shape == bboxes1.shape, (
-            'If `elementwise = True`, `bboxes1` and `bboxes2` must have the same number of bboxes.'
+            'If `elementwise = True`, `bboxes1` and `bboxes2` must have the same shape.'
         )
         
         bboxes1 = bboxes1[..., :4] # Shape: (..., num_bboxes1, 4)
@@ -93,8 +130,7 @@ def calc_ious(
     
     # Intersection width and height -> intersection area
     # Clamp to 0 avoid negative values and indicates no overlap
-    inter_wh = (inter_br - inter_ul).clamp(min = 0)
-    inter_areas = inter_wh[..., 0] * inter_wh[..., 1]
+    inter_areas = (inter_br - inter_ul).clamp(min = 0).prod(dim = -1)
     
     # Union areas: area(A) + area(B) - area(intersection)
     union_areas = bbox_area(bboxes2) + bbox_area(bboxes1) - inter_areas
@@ -111,7 +147,7 @@ def calc_ious(
         enclose_wh = (enclose_br - enclose_ul).clamp(min = 0)
         
         if reg_type == 'giou':
-            enclose_areas = enclose_wh[..., 0] * enclose_wh[..., 1]
+            enclose_areas = enclose_wh.prod(dim = -1)
             penalties = [(enclose_areas - union_areas) / (enclose_areas + eps)] # GIoU regularization term
             
         elif reg_type in ['diou', 'ciou']:
@@ -235,9 +271,29 @@ def predict_yolov3(model: nn.Module,
                    X: torch.Tensor,
                    scale_anchors: List[torch.Tensor],
                    strides: List[Tuple[int, int]],
-                   obj_threshold: float = 0.25,
+                   obj_threshold: float = 0.2,
                    nms_threshold: float = 0.5,
-                   softmax_probs: bool = False) -> List[dict]:
+                   softmax_probs: bool = False) -> List[Dict[str, Any]]:
+    '''
+    This is a wrapper function for `predict_yolov3_from_logits`. 
+    It uses a batch of preprocessed images `X` as input, rather than output logits from the model.
+
+    Args:
+        model (nn.Module): The YOLOv3 model to predict with. Will be set to `.eval()` mode if not done so already.
+        X (torch.Tensor): The batch of preprocessed images to predict on. This should be on the same device as `model`.
+                          Shape is (batch_size, channels, height, width). 
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each detection scale of `model`.
+                                            Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                            the (width, height) of the anchor in units of the input size (pixels).
+        strides (List[Tuple[int, int]]): List of strides (height, width) corresponding to each scale in `model`.
+        obj_threshold (float): The probability threshold to filter out low predicted object confidences. Default is 0.2.
+        nms_threshold (float): The IoU threshold used when performing NMS. Default is 0.5.
+        softmax_probs (bool): Whether to use softmax on class scores instead of sigmoid.
+
+    Returns:
+        pred_dicts (List[dict]): A list containing prediction dictionaries for each image sample in X.
+                                 For more details, see `predict_yolov3_from_logits`.                  
+    '''
     assert len(X.shape) == 4, (
         'Incorrect number of dimensions for `X`. Expecting shape (batch_size, channels, height, width).'
     )
@@ -265,12 +321,42 @@ def predict_yolov3_from_logits(scale_logits: List[torch.Tensor],
                                obj_threshold: float = 0.25,
                                nms_threshold: float = 0.5,
                                activate_logits: bool = True,
-                               softmax_probs: bool = False) -> List[dict]:
+                               softmax_probs: bool = False) -> List[Dict[str, Any]]:
     '''
-    All tensors in `scale_logits` should be on the same device.
-    activate_logits (bool): Whether logits should be activated with sigmoid (and optionally softmax)
-                            before decoding. Default is True.
-    softmax_probs (bool): Whether to softmax class logits instead of using sigmoid. Default is False.
+    Uses YOLOv3 output logits to predict the bounding boxes and class labels for a batch of preprocessed images.
+    The predictions are first filtered by object confidence and then filtered by Non-Maximum Suppression (NMS).
+    The bounding box predictions are returned in (x_min, y_min, x_max, y_max) format.
+
+    Args:
+        scale_logits (List[torch.Tensor]): List of logits from the YOLOv3 model, one per detection scale.
+                                           Each element is a tensor of shape: (batch_size, num_anchors, fmap_h, fmap_w, 5 + C),
+                                           where the last dimension represents (tx, ty, tw, th, to, class scores).
+                                           All tensors in `scale_logits` should be on the same device.
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each detection scale of the model.
+                                            Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                            the (width, height) of the anchor in units of the input size (pixels).
+        strides (List[Tuple[int, int]]): List of strides (height, width) corresponding to each scale in 
+                                         `scale_logits` and `scale_anchors`.
+        obj_threshold (float): The probability threshold to filter out low predicted object confidences. Default is 0.2.
+        nms_threshold (float): The IoU threshold used when performing NMS. Default is 0.5.
+        activate_logits (bool): Whether logits should be activated with sigmoid (and optionally softmax) before decoding. 
+                                If `activate_logits = False`, it is assumed that `scale_logits` is already activated 
+                                to a format suitable for decoding. Default is True.
+        softmax_probs (bool): Whether to use softmax on class scores instead of sigmoid.
+                              This is only applicable when `activate_logits = True`. Default is False.
+
+    Returns:
+        pred_dicts (List[dict]): A list of length batch_size, containing prediction dictionaries for each image sample in the batch.
+                                 The keys of each prediction dictionary are named to be compatible with `torchmetrics.detection.mean_ap`.
+                                 They are as follows:
+                                    - boxes (torch.Tensor): The predicted bounding boxes in (x_min, y_min, x_max, y_max) format.
+                                                            Shape is (num_filtered_bboxes, 4).
+                                    - labels (torch.Tensor): The predicted class labels for the bounding boxes in `bboxes`.
+                                                             Shape is (num_filtered_bboxes,)
+                                    - scores (torch.Tensor): The class probabilities for `labels`. 
+                                                             This is defined as P(object) * P(class_i | object) = P(class_i).
+                                                             Shape is (num_filtered_bboxes,)
+
     '''
     device = scale_logits[0].device # Get device to compute on
     

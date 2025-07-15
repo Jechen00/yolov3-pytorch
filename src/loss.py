@@ -16,17 +16,53 @@ from src import postprocess, evaluate
 class YOLOv3Loss(nn.Module):
     '''
     Loss function for training a YOLOv3 model.
+
+    Args:
+        lambda_coord (float): Weight of the localization loss. Default is 1.0.
+        lambda_class (float): Weight of the classification loss. Default is 1.0.
+        lambda_conf (float): Weight of the object confidence loss. Default is 1.0.
+        use_focal_conf (bool): Whether to use focal loss for object confidence, 
+                               as is done in https://arxiv.org/pdf/1708.02002.
+                               If False, the standard binary cross-entropy (BCE) loss is used.
+                               Default is False.
+        use_iou_coord (bool): Whether to use an IoU-based loss (IoU, GIoU, DIoU, or CIoU) for localization,
+                              as is done in https://arxiv.org/pdf/1608.01471.
+                              If False, the standard mean squared error (MSE) loss is used.
+                              If True, the following are required parameters: `scale_anchors`, `strides`.
+                              Default is False.
+        softmax_probs (bool): Whether to softmax class probabilities and use cross-entropy (CE) loss for classification.
+                              If False, sigmoid is applied to each class prediction and the standard BCE loss is used
+                              (treats each class as independent logisitic regression tasks).
+                              Default is False.
+        alpha (float): The alpha-parameter in focal loss used to balance importance between positive and negative examples. Default is 0.25.
+        gamma (float): The gamma-parameter in focal loss used to control how much to down-weight easy examples. Default is 2.0.
+        class_smoothing (float): Amount of label smoothing to apply to classification targets. Default is 0.0 (no smoothing).
+        iou_coord_reg (optional, Literal['giou', 'diou', 'ciou']): The type of regularization term to use if `use_iou_coord = True`.
+                                                                   If not provided, regular IoU loss is used.
+                                                                   When provided, the respective GIoU, DIoU, or CIoU regularizations are used.
+                                                                   Default is None.
+        scale_weights (optional, List[float]): List of weights to apply to the loss at each scale of the model.
+                                               The length of this list must match the number of scales in the model (e.g., [large, medium, small]). 
+                                               Each scale’s loss is multiplied by its corresponding weight:  
+                                                    `total_loss = large_weight * large_loss + medium_weight * medium_loss + small_weight * small_loss`.
+                                               If not provided, all scales are weighted equally. Default is None.
+        scale_anchors (optional, List[torch.tensor]): List of anchor tensors for each scale of the model.
+                                                      Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                                      the (width, height) of the anchor in units of the input size (pixels). 
+                                                      Default is None.
+        strides (optional, List[Tuple[int, int]]): List of strides (height, width) corresponding to each scale of the model.
+                                                   Default is None.
     '''
     def __init__(self,
                  lambda_coord: float = 1.0, 
                  lambda_class: float = 1.0, 
                  lambda_conf: float = 1.0,
-                 alpha: float = 0.25,
-                 gamma: float = 2.0,
-                 class_smoothing: float = 0.0,
                  use_focal_conf: bool = False,
                  use_iou_coord: bool = False,
                  softmax_probs: bool = False,
+                 alpha: float = 0.25,
+                 gamma: float = 2.0,
+                 class_smoothing: float = 0.0,
                  iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
                  scale_weights: Optional[List[float]] = None,
                  scale_anchors: Optional[List[torch.Tensor]] = None,
@@ -62,7 +98,26 @@ class YOLOv3Loss(nn.Module):
     def forward(self,
                 scale_logits: List[torch.Tensor],
                 scale_targs: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
-        
+        '''
+        Computes the YOLOv3 loss across a batch. Returns a dictionary containing the total loss and its unweighted components.
+
+        Args:
+            scale_logits (List[torch.Tensor]): List of logits from the YOLOv3 model, one per detection scale.
+                                               Each element is a tensor of shape: (batch_size, num_anchors, fmap_h, fmap_w, 5 + C),
+                                               where the last dimension represents (tx, ty, tw, th, to, class scores).
+            scale_targs: (List[torch.Tensor]): List of YOLOv3-encoded ground truth targets, one per detection scale.
+                                               Each element is a tensor with the same shape as `scale_logits`.
+                                               Each target should match the format of the model outputs **after activation**,
+                                               i.e., after applying sigmoid to box coordinates and object confidence,
+                                               and sigmoid or softmax to class scores.
+        Returns:
+            loss_dict (Dict[str, torch.Tensor]): Dictionary containing the loss component values (scalar tensors).
+                                                 The keys are as follows:
+                                                    - total: The total loss, summing together all weighted components of the YOLOv3 loss.
+                                                    - coord: The unweighted coordinate/localization loss from object cells (target P(object) > 0).
+                                                    - class: The unweighted classification loss from object cells (target P(object) > 0).
+                                                    - conf: The unweighted object confidence loss from all valid cells (target P(object) != -1).
+        '''
         loss_dict = {key: 0.0 for key in self.loss_keys}
         num_classes = scale_targs[0].shape[-1] - 5
 

@@ -31,20 +31,45 @@ EvalHistories = Dict[str, Dict[int, dict]]
 def yolov3_train_step(
     base_model: nn.Module,
     dataloader: DataLoader,
-    loss_fn: nn.Module,
+    loss_fn: loss.YOLOv3Loss,
     optimizer: Optimizer,
     ema: Optional[EMA] = None,
     ema_update_interval: int = 1,
     accum_steps: int = 1,
     device: Union[torch.device, str] = 'cpu'
 ) -> Dict[str, float]:
+    '''
+    Performs a single traning epoch for a YOLOv3 model.
+    This includes optional gradient accumulation and Exponential Moving Average (EMA) updates
+
+    Args:
+        base_model (nn.Module): The YOLOv3 model to train. This should already be on `device`.
+        dataloader (Dataloader): Dataloader for the training dataset.
+        loss_fn (loss.YOLOv3Loss): An instance of the YOLOv3Loss class used to compute the loss. 
+                                   Gradients are computed from `loss_dict['total']` returned by its forward method.
+        optimizer (Optimizer): Optimizer used to update `base_model` parameters every accumulated batch.
+        ema (optional, EMA): An instance of the EMA class to maintain EMA parameters of `base_model`.
+                             This should already be on `device`.
+                             If not provided, no EMA parameters are computed. Default is None.
+        ema_update_interval (int): The interval (in optimizer steps) to update the EMA parameters. 
+                                   Default is 1 (updated every optimizer step).
+        accum_steps (int): Number of batches to loop over before performing an optimizer step.
+                           If `accum_steps > 1`, gradients are accumulated over multiple batches,
+                           simulating a larger batch size. Default is 1.
+                           See: https://lightning.ai/blog/gradient-accumulation/
+        device (torch.device or str): The device to perform computations on. Default is 'cpu'.
+
+    Returns:
+        Dict[str, float]: Dictionary mapping the components of the YOLOv3 training loss
+                          to its value averaged over all samples in the dataset. 
+                          The keys of this dictionary are the same as the output of `loss_fn`.
+    '''
     num_samps = len(dataloader.dataset)
     loss_sums = {key: 0.0 for key in loss_fn.loss_keys}
     
     base_model.train()
+    optimizer_steps = 0
     for i, (imgs, scale_targs) in enumerate(dataloader):
-        num_batches = i + 1
-
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
         batch_size = imgs.shape[0]
@@ -59,14 +84,15 @@ def yolov3_train_step(
             loss_sums[key] += loss_dict[key].detach() * batch_size
 
         # Simulate a larger batch_size if needed
-        last_batch = (num_batches == len(dataloader))
-        if (num_batches % accum_steps == 0) or last_batch:
+        last_batch = ((i + 1) == len(dataloader))
+        if ((i + 1) % accum_steps == 0) or last_batch:
             optimizer.step()
             optimizer.zero_grad()
+            optimizer_steps += 1
 
             # Update EMA model if needed
             if ema is not None:
-                if (num_batches % ema_update_interval == 0) or last_batch:
+                if (optimizer_steps % ema_update_interval == 0) or last_batch:
                     ema.update()
 
     return {key: loss_sums[key].item() / num_samps for key in loss_sums}
@@ -74,33 +100,74 @@ def yolov3_train_step(
 def yolov3_val_step(
     base_model: nn.Module, 
     dataloader: DataLoader, 
-    loss_fn: nn.Module, 
+    loss_fn: loss.YOLOv3Loss, 
     ema: Optional[EMA] = None,
     should_eval: bool = False,
     scale_anchors: Optional[List[torch.Tensor]] = None,
     strides: Optional[List[Tuple[int, int]]] = None,
-    obj_threshold: Optional[float] = None,
-    nms_threshold: Optional[float] = None,
+    obj_threshold: float = 0.01,
+    nms_threshold: float = 0.5,
     map_thresholds: Optional[List[float]] = None,
     device: Union[torch.device, str] = 'cpu',
     **kwargs
 ) -> Dict[str, Dict[str, Any]]:
     '''
     Performs a single validation step for a YOLOv3 model. 
-    This includes YOLOv3 loss computation and optional evaluation metrics (mAP and mAR).
+    This includes YOLOv3 loss computation and optional evaluation metrics (mAP and mAR)
+    for both the base model and an optional exponential moving average (EMA) model.
 
     Args:
+        base_model (nn.Module): The YOLOv3 model to compute validation loss and evalutation metrics for. 
+                                This should already be on `device`.
+        dataloader (DataLoader): Dataloader for the validation dataset.
+        loss_fn (loss.YOLOv3Loss): An instance of the YOLOv3Loss class used to compute the loss.
+        ema (optional, EMA): An EMA object tracking an EMA of `base_model` parameters.
+                             If provided, validation loss and evaluation metrics are also computed for ema.ema_model.
+                             This should already be on `device`.
+        should_eval (bool): Whether to compute evaluation metrics (mAP and mAR). Default is False.
+                            If True, must provide `strides` and `scale_anchors`.
+        scale_anchors (optional, List[torch.tensor]): List of anchor tensors for each scale of the model.
+                                                      Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                                      the (width, height) of the anchor in units of the input size (pixels). 
+                                                      Default is None.
+        strides (optional, List[Tuple[int, int]]): List of strides (height, width) corresponding to each scale of the model.
+                                                   Default is None.
+        obj_threshold (float): The porobability threshold to filter out low predicted object confidences, P(object). 
+                                         Used during evaluation when computing mAP/mAR. Default is 0.01.
+        nms_threshold (float): The IoU threshold used during evaluation when performing NMS for mAP/mAR. Default is 0.5.
+        map_thresholds (optional, List[float]): A list of IoU thresholds used for mAP/mAR calculations.
+                                                If `should_eval = True` is provided and `map_thresholds = None`, 
+                                                this defaults to [0.5].
+        device (torch.device or str): The device to perform computations on. Default is 'cpu'.
         **kwargs: Any other arguments for the `torchmetrics.detection.mean_ap.MeanAveragePrecision` class.
                   Note that the following arguments are overwritten: 
-                    `box_format='xyxy'`, 'iou_thresholds=map_thresholds`.
+                    `box_format = 'xyxy'`, 'iou_thresholds = map_thresholds`.
 
-    Note: Inputs (e.g. scale_anchors, strides) should have been validated externally.
-        If `should_eval=True`. This assumes all dependencies are correctly provided.
+    Returns:
+        val_results (Dict[str, Dict[str, Any]]): Dictionary of validation results for each relevant model.
+                                                 Keys are:
+                                                    - 'base': Results for `base_model`
+                                                    - 'ema': Results for `ema.ema_model` (if `ema` is provided)
+
+                                                 Each validation result is subdictionary with the following keys:
+                                                    - loss_avgs: Dictionary mapping the components of the YOLOv3 validation loss
+                                                                 to its value averaged over all samples in the dataset. 
+                                                                 The keys of this dictionary are the same as the output of `loss_fn`.
+                                                    - eval_res: If `should_eval = True`, this is a metric dictionary (with mAP and mAR values) 
+                                                                produced by `MeanAveragePrecision.compute()`. If `should_eval = False`, this is None.
+                                                                For more details on the metric dictionaries, see:
+                                                                    https://lightning.ai/docs/torchmetrics/stable/detection/mean_average_precision.html
+
+    Note: Inputs (e.g. scale_anchors, strides) should have been validated externally (e.g. by a data class).
+          If `should_eval = True`. This assumes all dependencies are correctly provided.
     '''
     ema_present = ema is not None
     loss_keys = loss_fn.loss_keys
     num_samps = len(dataloader.dataset)
     softmax_probs = getattr(loss_fn, 'softmax_probs', False)
+
+    if (should_eval) and (map_thresholds is None):
+        map_thresholds = [0.5]
 
     # -------------------------
     # Tracker Set-up
@@ -202,19 +269,20 @@ def train(
     device: Union[torch.device, str] = 'cpu'
 ) -> Tuple[TrainLosses, ValLosses, EvalHistories]:
     '''
-    Trains a YOLOv3 model, tracking loss values and evaluation metrics (e.g. mAP and mAR).
+    Trains a YOLOv3 model, tracking loss values and evaluation metrics (e.g. mAP and mAR)
+    for both the base model and, if provided, an exponential moving average (EMA) model.
     Supports training from scratch or resuming from a checkpoint.
     
     The flow of each epoch is as follows:
         - Computes training loss
-        - Updates the base model and optionally the ema model 
+        - Updates the base model and optionally the EMA model 
         - Optionally steps optimizer (Note that this happens after the training loop)
         - Computes validation losses per epoch
         - Optionally computes mAP/mAR at evaluation epochs
         - Optionally saves checkpoint
 
     Args:
-        base_model (nn.Module): The main YOLOv3 model to train. Should already be on `device`.
+        base_model (nn.Module): The main YOLOv3 model to train and evaluate. Should already be on `device`.
         train_builder (DataLoaderBuilder): Builder that constructs the Dataloader for the training dataset.
         val_builder (DataLoaderBuilder): Builder that constructs the Dataloader for the validation dataset.
         loss_fn (loss.YOLOv3Loss): The YOLOv3 loss function used to compute training/validation error. 
@@ -225,19 +293,24 @@ def train(
                                                          If provided and resuming from a checkpoint (`ckpt_cfgs.resume = True`),
                                                          the checkpoint file at `ckpt_cfgs.resume_path` must also include a scheduler. 
                                                          Default is None, which disables scheduling entirely — even when resuming.
-        ema (optional, EMA): An instance of the EMA class used to maintain an EMA version of the `base_model`.
+        ema (optional, EMA): An instance of the EMA class used to maintain an EMA of `base_model` parameters.
                              The model at `ema.ema_model` should already be on `device`.
         device (str or torch.device): The device to perform computations on. Default is 'cpu'.
 
     Returns:
         base_train_losses (Dict[str, list]): Dictionary mapping loss components in `loss_fn.loss_keys` to their 
-                                             list of training values per epoch. This is only for the base model (`model`).
-        val_losses (Dict[str, Dict[str, list]]): Dictionary mapping model keys 'base' for `model` and 'ema' for `ema`, if provided)
-                                                 to their respective validation loss dictionary. 
-                                                 The validation loss dictionary is the same as `train_losses`,
-                                                 but for the validation dataset.
-        eval_histories (dict):  Dictionary mapping model keys ('base' for `model` and 'ema' for `ema`, if provided)
-                                to their respective evaluation history dictionary.
+                                             list of training values per epoch. This is only for the base model (`base_model`).
+        val_losses (Dict[str, Dict[str, list]]): Dictionary mapping model keys to their respective validation loss dictionary. 
+                                                 Keys are:
+                                                    - 'base': Validation loss dictionary for `base_model`
+                                                    - 'ema': Validation loss dictionary for `ema.ema_model` (if `ema` is provided)
+
+                                                 The validation loss dictionary is the same as `train_losses`, but for the validation dataset.
+        eval_histories (dict):  Dictionary mapping model keys to their respective evaluation history dictionary.
+                                Keys are:
+                                - 'base': Evaluation history dictionary for `base_model`
+                                - 'ema': Evaluation history dictionary for `ema.ema_model` (if `ema` is provided)
+
                                 The evaluation history dictionary maps epoch indices (int)
                                 to metric dictionaries (with mAP and mAR values) returned by `MeanAveragePrecision.compute()`. 
 
@@ -476,70 +549,66 @@ class TrainEvalConfigs():
     Data class for setting YOLOv3 training and evaluation configurations.
 
     Args:
+        scale_anchors (List[torch.tensor]): List of anchor tensors for each output scale of the model.
+                                            Each element has shape: (num_anchors, 2), where the last dimension gives 
+                                            the (width, height) of the anchor in units of the input size (pixels). 
+        strides (List[Tuple[int, int]]): List of strides (height, width) corresponding to 
+                                         each scale of the model (as well as in `scale_anchors`).
         num_epochs (int): Number of epochs to train the YOLOv3 model.
         accum_steps (int): Number of batches to loop over before updating model parameters. 
                            Applies during training only. 
                            If `accum_steps > 1`, gradients are accumulated over multiple batches,
                            simulating a larger batch size. Default is 1.
                            See: https://lightning.ai/blog/gradient-accumulation/
-        ema_update_interval (int): Interval (in batches) to update EMA model weights. 
+        ema_update_interval (int): Interval (in optimizer steps) to update EMA model weights. 
                                    This is only used if an EMA class instance is provided during training. Default is 1.
         eval_interval (optional, int): Interval (in epochs) to compute evaluation metrics on the validation dataset
                                        after the first computation at `eval_start_epoch`.
-                                       If None, evaluation metrics are only computed at the every end of training.
-                                       If provided, the following are also required: 
-                                       `scale_anchors`, `strides`, `obj_threshold`, `nms_threshold`. Default is None.
+                                       If None, evaluation metrics are only computed at the every end of training. Default is None.
         eval_start_epoch (int): The epoch in which the evaluation computation periods start. 
                                 This must be greater than 0 and is only used if `eval_interval` is provided.
                                 Default is 0, which means evaluations happen at the start of training.
-        scale_anchors (optional, List[torch.tensor]): List of anchor tensors for each output scale of the model.
-                                                      Each element has shape: (num_anchors, 2), where the last dimension gives 
-                                                      the (width, height) of the anchor in units of the input size (pixels). 
-                                                      Default is None.
-        strides (optional, List[Tuple[int, int]]): List of strides (height, width) corresponding to 
-                                                   each scale of the model (as well as in `scale_anchors`). Default is None.
         multi_aug_decay_range (optional, Tuple[int, int]): The epoch range (start_epoch, end_epoch) 
                                                            in which to decay multi-image augmentation probability.
                                                            Note that this is a half-open interval, where decay starts at `start_epoch`
                                                            and reaches probability = 0 by `end_epoch - 1`.
                                                            Only used if multi-image augmentations are applied during training.
                                                            If not provided, multi-image augmentation probability never decays. Default is None.
-        obj_threshold (optional, float): Threshold to filter out low predicted object probabilities, i.e. P(object). 
-                                         Used during evaluation when computing mAP/mAR. Default is None.
-        nms_threshold (optional, float): The IoU threshold used during evaluation when performing NMS for mAP/mAR. Default is None.
+        obj_threshold (optional, float): The probability threshold to filter out low predicted object confidences, P(object). 
+                                         Used during evaluation when computing mAP/mAR. Default is 0.01.
+        nms_threshold (optional, float): The IoU threshold used during evaluation when performing NMS for mAP/mAR. Default is 0.5.
         map_thresholds (optional, List[float]): A list of IoU thresholds used for mAP/mAR calculations.
                                                 If `eval_interval` is provided and `map_thresholds = None`, this defaults to [0.5].
         map_kwargs (Dict[str, Any]): Dictionary of additional arguments to pass to the 
                                      `torchmetrics.detection.MeanAveragePrecision` class for mAP/mAR evaluation.
-                                     Note: The following arguments will be overwritten:
-                                     `box_format='xyxy'` and `iou_thresholds=map_thresholds`.
+                                     Note: The following arguments will be overwritten: `box_format = 'xyxy'` and `iou_thresholds = map_thresholds`.
     '''
+    scale_anchors: List[torch.Tensor]
+    strides: List[Tuple[int, int]]
+
     num_epochs: int
     accum_steps: int = 1
     
     ema_update_interval: int = 1
     eval_interval: Optional[int] = None
     eval_start_epoch: int = 0
-    scale_anchors: Optional[List[torch.Tensor]] = None
-    strides: Optional[List[Tuple[int, int]]] = None
     multi_aug_decay_range: Optional[Tuple[int, int]] = None
-    obj_threshold: Optional[float] = None
-    nms_threshold: Optional[float] = None
+    obj_threshold: float = 0.01
+    nms_threshold: float = 0.5
     map_thresholds: Optional[List[float]] = None
     map_kwargs: Dict[str, Any] = field(default_factory = dict)
 
     def __post_init__(self):
         assert self.accum_steps > 0, 'Number of accumulation steps, `accum_steps`, must be at least 1'
 
-        # Set a default value for map_thresholds
         if self.eval_interval is not None:
             assert self.eval_interval > 0, (
                 'The interval (in epochs) for evaluation computations, `eval_interval`, must be at least 1 if provided.'
             )
             assert self.eval_start_epoch >= 0, '`eval_start_epoch`, cannot be negative.'
-            for eval_attr in ['scale_anchors', 'strides', 'obj_threshold', 'nms_threshold']:
-                assert getattr(self, eval_attr) is not None, f'If `eval_interval` is provided for evaluations, `{eval_attr}` must not be None'
-            self.map_thresholds = [0.5] if self.map_thresholds is None else self.map_thresholds
+
+        # Set a default value for map_thresholds
+        self.map_thresholds = [0.5] if self.map_thresholds is None else self.map_thresholds
         
 @dataclass
 class CheckpointConfigs():

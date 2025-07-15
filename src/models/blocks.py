@@ -46,7 +46,15 @@ class ConvBNAct(nn.Module):
         return self.conv_bn_act(X)
     
 class Route(nn.Module):
-    def __init__(self, route_layers):
+    '''
+    A route layer that concatenates the outputs of multiple previous layers
+    along the channel dimension.
+
+    Args:
+        route_layers (List[int]): List of layer indices to get the outputs of and concatenate together.
+                                  Indices can be absolute or relative to the current layer.
+    '''
+    def __init__(self, route_layers: List[int]):
         super().__init__()
         self.route_layers = route_layers
         
@@ -61,10 +69,11 @@ class Route(nn.Module):
     
 class ResConnect(nn.Module):
     '''
-    A residual connection (shortcut) layer.
+    A residual (shortcut) layer that adds the output of a specified earlier layer
+    to the output of the layer directly before this one.
     
     Args:
-        from_layer (int): The index indicating which previous layer to add to the current input. 
+        from_layer (int): The index indicating which earlier layer to add to the current input (output of layer i-1). 
                           This should be relative to this ResConnect layer, which is assumed to be layer i.
                           The current input refers to the output of layer i-1.
                           

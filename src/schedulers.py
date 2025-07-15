@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from torch.optim import lr_scheduler, Optimizer
-from typing import List
+from typing import List, Union
 
 
 #####################################
@@ -17,10 +17,12 @@ class WarmupMultiStepLR(lr_scheduler.MultiStepLR):
     
     Args:
         optimizer (torch.optim.Optimizer): Optimizater whose learning rates will be changed by the scheduler.
-        pre_warmup_lrs (List[float]): A list of learning rates for each parameter group 
-                                    at the start of training (epoch 0).
-                                    The scheduler will linearly increase the learning rate 
-                                    from these values to the base learning rates over the warmup period.
+        pre_warmup_lrs (float or List[float]): A list of learning rates for each parameter group 
+                                               at the start of training (epoch 0).
+                                               The scheduler will linearly increase the learning rate 
+                                               from these values to the base learning rates over the warmup period.
+                                               If provided a `float`, it is assumed that all parameter groups have the same
+                                               `pre_warmup_lrs` value.
         milestones (list): List of indices for the milestone epochs to apply learning rate decay.
                         These indices must be after the value of `warmup_epochs`.
         warmup_epochs (int): Number of epochs over which to linearly increase the learning rates from 
@@ -33,7 +35,7 @@ class WarmupMultiStepLR(lr_scheduler.MultiStepLR):
     '''
     def __init__(self, 
                  optimizer: Optimizer, 
-                 pre_warmup_lrs: List[float],
+                 pre_warmup_lrs: Union[float, List[float]],
                  milestones: List[int], 
                  warmup_epochs: int = 5,
                  gamma: float = 0.1,
@@ -42,9 +44,12 @@ class WarmupMultiStepLR(lr_scheduler.MultiStepLR):
         invalid = [m for m in milestones if m <= warmup_epochs]
         assert not invalid, f'Milestones {invalid} must all be after `warmup_epochs` ({warmup_epochs})'
         
-        assert len(pre_warmup_lrs) == len(optimizer.param_groups), (
-            'Length of `pre_warmup_lrs` must match number of parameter groups in `optimizer`'
-        )
+        if isinstance(pre_warmup_lrs, list):
+            assert len(pre_warmup_lrs) == len(optimizer.param_groups), (
+                'Length of `pre_warmup_lrs` must match number of parameter groups in `optimizer`'
+            )
+        else:
+            pre_warmup_lrs = [pre_warmup_lrs] * len(optimizer.param_groups)
         
         self.pre_warmup_lrs = pre_warmup_lrs
         self.warmup_epochs = warmup_epochs
@@ -76,10 +81,12 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
     
     Args:
         optimizer (torch.optim.Optimizer): Optimizater whose learning rates will be changed by the scheduler.
-        pre_warmup_lrs (List[float]): A list of learning rates for each parameter group 
-                                      at the start of training (epoch 0).
-                                      The scheduler will linearly increase the learning rate 
-                                      from these values to the base learning rates over the warmup period.
+        pre_warmup_lrs (float or List[float]): A list of learning rates for each parameter group 
+                                               at the start of training (epoch 0).
+                                               The scheduler will linearly increase the learning rate 
+                                               from these values to the base learning rates over the warmup period.
+                                               If provided a `float`, it is assumed that all parameter groups have the same
+                                               `pre_warmup_lrs` value.
         T_max (int): Maximum number of epochs over which to anneal the learning rate with a cosine curve. 
                      The learning rate decays from `base_lr` to `eta_min` over this period.
                      Must be greater than `warmup_epochs`. 
@@ -94,7 +101,7 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
     '''
     def __init__(self, 
                  optimizer: Optimizer, 
-                 pre_warmup_lrs: List[float],
+                 pre_warmup_lrs: Union[float, List[float]],
                  T_max: int,
                  warmup_epochs: int = 5,
                  eta_min: float = 0.0,
@@ -104,9 +111,12 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
             f'Maximum number of epochs `T_max` ({T_max}) must be greater than `warmup_epochs` ({warmup_epochs})'
         )
         
-        assert len(pre_warmup_lrs) == len(optimizer.param_groups), (
-            'Length of `pre_warmup_lrs` must match number of parameter groups in `optimizer`'
-        )
+        if isinstance(pre_warmup_lrs, list):
+            assert len(pre_warmup_lrs) == len(optimizer.param_groups), (
+                'Length of `pre_warmup_lrs` must match number of parameter groups in `optimizer`'
+            )
+        else:
+            pre_warmup_lrs = [pre_warmup_lrs] * len(optimizer.param_groups)
         
         self.pre_warmup_lrs = pre_warmup_lrs
         self.warmup_epochs = warmup_epochs

@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from src.models import blocks
 from src.utils import yolo_loader
@@ -14,7 +14,36 @@ from src.utils import yolo_loader
 #####################################
 # Functions
 #####################################
-def make_module(cfg_dict: dict) -> Tuple[nn.Module, Optional[dict]]:
+def make_module(cfg_dict: Dict[str, str]) -> Tuple[nn.Module, Optional[dict]]:
+    '''
+    Creates a PyTorch module from a configuration dictionary returned by `utils.yolo_loader.parse_cfgs`.
+    Currently supports the following module names ('name' key in `cfg_dict`):
+        - convolutional: Convolutional layer with optional batch normalization and activation (leaky)
+        - upsample: Upsample layer using nearest neighbor interpolation
+        - route: Route layer
+        - shortcut: Residual connection (shortcut) layer
+        - yolo: YOLO detection head information. This uses a `nn.Identity` module as a placeholder
+                and scale-specific settings are extracted into `scale_info`.
+
+    Args:
+        cfg_dict (Dict[str, str]): A configuration dictionary from `utils.yolo_loader.parse_cfgs`.
+
+    Returns:
+        module (nn.Module): A PyTorch module corresponding to the specified layer.
+        scale_info (Optional[dict]): For 'yolo' layers, a dictionary containing:
+            - 'anchors' (List[Tuple[float, float]]): Anchor box dimensions (width, height) for this scale.
+            - 'num_classes' (int): Number of class labels.
+            - 'ignore_thresh' (float): IoU threshold for ignoring predictions during training (used in anchor-matching).
+            - 'truth_thresh' (float): IoU threshold for treating predictions as positive during training.
+            - 'jitter' (float): Data augmentation jitter parameter.
+            - 'random' (int): Flag for applying random resizing during training (multi-scale training).
+
+            For more information on these keys, refer to: 
+                https://github.com/AlexeyAB/darknet/wiki/CFG-Parameters-in-the-different-layers
+                               
+            Returns None for non-'yolo' layers.
+
+    '''
     module_name = cfg_dict['name']
     scale_info = None
     
@@ -92,6 +121,13 @@ def make_module(cfg_dict: dict) -> Tuple[nn.Module, Optional[dict]]:
 # Model Components
 # ------------------------
 class DarkNet53Backbone(nn.Module, yolo_loader.WeightLoadable):
+    '''
+    Feature extraction backbone of a DarkNet-53 model, constructed from a configuration file
+    that follows the structure at: https://github.com/pjreddie/darknet/blob/master/cfg/darknet53_448.cfg
+
+    Args:
+        cfg_file (str): The full path to a `.cfg` file for DarkNet-53 feature extractor configurations.
+    '''
     def __init__(self, cfg_file: str):
         super().__init__()
         self.model_cfgs = yolo_loader.parse_cfgs(cfg_file)
@@ -108,7 +144,16 @@ class DarkNet53Backbone(nn.Module, yolo_loader.WeightLoadable):
         self, 
         X: torch.Tensor
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-        
+        '''
+        Forward function of the backbone.
+
+        Args:
+            X (torch.Tensor): Tensor input of shape (batch_size, in_channels, height, width)
+
+        Returns:
+            Y (torch.Tensor): Final output tensor after passing through all layers.
+            layer_outputs (List[torch.Tensor]): List of intermediate outputs from each layer in the backbone.
+        '''
         Y = X
         layer_outputs = []
         for cfg_dict, module in zip(self.model_cfgs, self.module_list):
@@ -125,6 +170,13 @@ class DarkNet53Backbone(nn.Module, yolo_loader.WeightLoadable):
         return Y, layer_outputs
     
 class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
+    '''
+    YOLOv3 detector (neck and heads), with its prediction layers constructed from a configuration file
+    that follows the structure at: https://github.com/pjreddie/darknet/blob/master/cfg/yolov3-voc.cfg
+
+    Args:
+        cfg_file (str): Path to the `.cfg` file that defines the structure of the YOLOv3 detection head.
+    '''
     def __init__(self, cfg_file: str):
         super().__init__()
         self.model_cfgs = yolo_loader.parse_cfgs(cfg_file)
@@ -144,9 +196,22 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
     def forward(
         self, 
         layer_outputs: List[torch.Tensor]
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    ) -> List[torch.Tensor]:
         '''
-        layer_outputs (list[torch.Tensor]): List of layer outputs from the backbone of a YOLOv3 model.
+        Forward function of the detector.
+
+        This function processes intermediate outputs from a backbone (e.g., DarkNet-53 feature extractor)
+        and produces detection predictions at multiple scales.
+        For each YOLO layer in the detector, the output of the previous layer is reshaped to
+        the expected YOLOv3 format: (batch_size, num_anchors, height, width, 5 + C),
+        where the last dimension represents (tx, ty, tw, th, to, class_scores).
+
+        Args:
+            layer_outputs (list[torch.Tensor]): List of layer outputs from the backbone of a YOLOv3 model.
+
+        Returns:
+            scale_outputs (List[torch.Tensor]): List of prediction tensors, one per detection scale.
+                                                The shape of each tensor is (batch_size, num_anchors, height, width, 5 + C).
         '''
         
         layer_outputs = list(layer_outputs)
@@ -190,11 +255,13 @@ class YOLOv3(nn.Module):
                  backbone: nn.Module, 
                  detector_cfgs: str):
         '''
+        YOLOv3 built from a customizable backbone (nn.Module) and a detector configuration file.
+
         backbone (nn.Module): The backbone/feature extractor, with weights ideally pretrained on ImageNet.
                               The output should be 2D spatial feature maps of shape (batch_size, channels, height, width).
-        detector_cfgs (str): The `.cfg` file for the YOLOv3 detector configs. 
-                              It should follow the structure from: 
-                              https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
+        detector_cfgs (str): Full path to a `.cfg` file for the YOLOv3 detector configs. 
+                             It should follow the structure from: 
+                                https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
         '''
         super().__init__()
         self.backbone = backbone        
@@ -207,22 +274,22 @@ class YOLOv3(nn.Module):
             input_shape: Tuple[int, int, int, int]
     ) -> Tuple[List[torch.Tensor], List[Tuple[int, int]], List[Tuple[int, int]]]:
         '''
-        Infers the anchors, feature map size and stride of the model's scales, based on an input shape.
+        Infers the feature map size and stride of the model's scales, based on an input shape.
 
         Note: From my understanding, the original YOLOv3 paper does **not** rescale anchors to the input size,
               despite them being derived from using k-means on COCO with a 416x416 input size.
               
         Args:
-            input_shape (Tuple[int, int, int, int]): Tuple for the input shape, defining dimensions 
-                                                     (batch_size, channels, height, width).
+            input_shape (Tuple[int, int, int, int]): Tuple for the input shape,
+                                                     defining dimensions (batch_size, channels, height, width).
                                                      Used to create a dummy input to infer feature map sizes and strides.
                                                      By YOLOv3 requirements, `height` and `width` must be divisible by 32.
 
         Returns:
             scale_anchors (List[Tensor]): List of anchor tensors of shape (num_anchors, 2), 
                                           where the last dimension is (anchor_w, anchor_h).
-                                          Anchors are not normalized. They are in units of the input shape. 
-            strides (List[Tuple[int, int]]): List of stides in format (stride_h, stride_w).
+                                          Anchors are not normalized. They are in units of the input shape (pixels). 
+            strides (List[Tuple[int, int]]): List of strides in format (stride_h, stride_w).
             fmap_sizes (List[Tuple[int, int]]): List of feature map sizes in format (fmap_h, fmap_w).
         '''
         _, _, height, width = input_shape
@@ -232,13 +299,8 @@ class YOLOv3(nn.Module):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-
-        orig_training = self.training  # True if training mode, False if eval mode
-        self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             scale_logits = self.forward(dummy_X)
-        if orig_training:
-            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
@@ -250,15 +312,19 @@ class YOLOv3(nn.Module):
         return scale_anchors, strides, fmap_sizes
     
     def init_detector_weights(self, input_shape: tuple):
+        '''
+        Randomly initalizes the detector layers as follows:
+            - Convolutional layers:
+                - Weights are initialized from a normal distribution, N(mu = 0, sigma = 0.01)
+                - Biases are set to 0.0
+            - Batch normalization layers:
+                - Weights are set to 1.0
+                - Biases are set to 0.0
+        '''
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-
-        orig_training = self.training  # True if training mode, False if eval mode
-        self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             _ = self.forward(dummy_X) # Initalize lazy layers
-        if orig_training:
-            self.train()
 
         for module in self.detector.modules():
             if isinstance(module, nn.Conv2d):
@@ -270,15 +336,29 @@ class YOLOv3(nn.Module):
                 nn.init.constant_(module.weight, 1.0)
                 nn.init.constant_(module.bias, 0.0)
 
-    def forward(self, X):
+    def forward(self, X: torch.Tensor) -> List[torch.Tensor]:
+        '''
+        Forward function of the YOLOv3 model.
+        
+        Args:
+            X (torch.Tensor): Input tensor of shape (batch_size, channels, height, width).
+
+        Returns:
+            scale_outputs (List[torch.Tensor]): List of prediction tensors, one per detection scale.
+                                                The shape of each tensor is 
+                                                (batch_size, num_anchors, height, width, 5 + C).
+        '''
         _, layer_outputs = self.backbone(X)
         scale_outputs = self.detector(layer_outputs)
         return scale_outputs
     
 class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
     '''
-    YOLOv3 model built entirely from a single config file, without separate backbone/head objects. 
-    This follows the original .cfg structure from https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
+    YOLOv3 model built entirely from a single configuration file, without separate backbone/detector objects. 
+    This follows the original `.cfg` structure from https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
+
+    Args:
+        cfg_file: Path to a `.cfg` file for the full YOLOv3 model configs.
     '''
     def __init__(self, cfg_file: str):
         super().__init__()
@@ -305,22 +385,22 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
             input_shape: Tuple[int, int, int, int]
     ) -> Tuple[List[torch.Tensor], List[Tuple[int, int]], List[Tuple[int, int]]]:
         '''
-        Infers the anchors, feature map size and stride of the model's scales, based on an input shape.
+        Infers the feature map size and stride of the model's scales, based on an input shape.
 
         Note: From my understanding, the original YOLOv3 paper does **not** rescale anchors to the input size,
               despite them being derived from using k-means on COCO with a 416x416 input size.
               
         Args:
-            input_shape (Tuple[int, int, int, int]): Tuple for the input shape, defining dimensions 
-                                                     (batch_size, channels, height, width).
+            input_shape (Tuple[int, int, int, int]): Tuple for the input shape,
+                                                     defining dimensions (batch_size, channels, height, width).
                                                      Used to create a dummy input to infer feature map sizes and strides.
                                                      By YOLOv3 requirements, `height` and `width` must be divisible by 32.
 
         Returns:
             scale_anchors (List[Tensor]): List of anchor tensors of shape (num_anchors, 2), 
-                                          where the last dimension us is (anchor_w, anchor_h).
-                                          Anchors are not normalized, they are in units of the input size (pixels). 
-            strides (List[Tuple[int, int]]): List of stides in format (stride_h, stride_w).
+                                          where the last dimension is (anchor_w, anchor_h).
+                                          Anchors are not normalized. They are in units of the input shape (pixels). 
+            strides (List[Tuple[int, int]]): List of strides in format (stride_h, stride_w).
             fmap_sizes (List[Tuple[int, int]]): List of feature map sizes in format (fmap_h, fmap_w).
         '''
         _, _, height, width = input_shape
@@ -330,13 +410,8 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
 
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-
-        orig_training = self.training  # True if training mode, False if eval mode
-        self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             scale_logits = self.forward(dummy_X)
-        if orig_training:
-            self.train()
 
         fmap_sizes = [tuple(logits.shape[-3:-1]) for logits in scale_logits]
         strides = [(height // size[0], width // size[1]) for size in fmap_sizes]
@@ -350,8 +425,18 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
     def forward(
         self, 
         X: torch.Tensor
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+    ) -> List[torch.Tensor]:
+        '''
+        Forward function of the YOLOv3 model.
         
+        Args:
+            X (torch.Tensor): Input tensor of shape (batch_size, channels, height, width).
+
+        Returns:
+            scale_outputs (List[torch.Tensor]): List of prediction tensors, one per detection scale.
+                                                The shape of each tensor is 
+                                                (batch_size, num_anchors, height, width, 5 + C).
+        '''
         Y = X
         scale_idx = 0
         scale_outputs, layer_outputs = [], []

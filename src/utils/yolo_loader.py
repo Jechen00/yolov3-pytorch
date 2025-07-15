@@ -6,19 +6,40 @@ from torch import nn
 
 import re
 import numpy as np
-from typing import List
+from typing import List, Tuple, Dict
 
 
 #####################################
 # Functions
 #####################################
-def parse_cfgs(cfg_file: str) -> List[dict]:
+def parse_cfgs(cfg_file: str) -> List[Dict[str, str]]:
     '''
     Parses a config file for YOLOv3. 
     The format of the config file should follow: 
         https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg
     Documentation for configs:
         https://github.com/AlexeyAB/darknet/wiki/CFG-Parameters-in-the-different-layers
+
+    Args:
+        cfg_file (str): Full path to the configuration file.
+    Returns:
+        section_cfgs (List[Dict[str, str]]): List of configuration dictionaries containing settings of 
+                                             each section/layer in the configuration file.
+
+                                             For example, if a section has the form:
+                                                [convolutional]
+                                                size=1
+                                                stride=1
+                                                pad=1
+                                                filters=75
+                                                activation=linear
+                                             The configuration dictionary is:
+                                                {'name': 'convolutional',
+                                                 'size': '1',
+                                                 'stride': '1',
+                                                 'pad': '1',
+                                                 'filters: '75',
+                                                 'activation': 'linear'}
     '''
     file = open(cfg_file, 'r')
     raw_cfgs = re.split(r'(?=\[.*\])', file.read().strip()) # Split config file by [section]
@@ -66,6 +87,10 @@ class WeightLoadable():
                 A forward method that initializes all layers (e.g., for lazy layers).
     '''
     def validate_weightloadable(self):
+        '''
+        Checks if a subclass inheriting from `WeightLoadable` also inherits from `nn.Module`
+        and has the attributes 'model_cfgs', 'module_list', and 'forward'.
+        '''
         if not isinstance(self, nn.Module):
             raise TypeError('Subclass of `WeightLoadable` must also inherit from `nn.Module`')
         
@@ -73,12 +98,12 @@ class WeightLoadable():
             if not hasattr(self, attr):
                 raise AttributeError(f'Subclass of `WeightLoadable` is missing `{attr}`')
             
-    def load_weights_file(self, weights_file: str, input_shape: tuple):
+    def load_weights_file(self, weights_file: str, input_shape: Tuple[int]):
         '''
         Loads weights into a model using a `.weights` binary file.
-        This also assumes layers are in the same order as in the original Darknet implementation.
+        This also assumes layers are in the same order as in the weights file.
         The loading logic follows the order of weights stored in the binary file (DarkNet-format):
-            - If batch_normalize = 1 iin convolutional block:
+            - If batch_normalize = 1 in convolutional block:
                 bn_bias -> bn_weight -> bn_running_mean -> bn_running_var -> conv_weight
             - Otherwise:
                 conv_bias -> conv_weight
@@ -91,13 +116,8 @@ class WeightLoadable():
         '''     
         device = next(self.parameters()).device
         dummy_X = torch.zeros(input_shape).to(device)
-
-        orig_training = self.training  # True if training mode, False if eval mode
-        self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             _ = self.forward(dummy_X) # Initalize lazy layers
-        if orig_training:
-            self.train()
 
         with open(weights_file, 'rb') as f:
             header = np.fromfile(f, dtype = np.int32, count = 5)
