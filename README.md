@@ -64,7 +64,6 @@ For a reference: [data/voc/voc.names](https://github.com/Jechen00/yolov3-pytorch
 ### 2) Create a `CustomDataset` Class and Define its Required Dunder Methods
 Your custom dataset class must subclass `DetectionDatasetBase` like so:
 ```
-import random
 from src.data_setup.dataset_utils import DetectionDatasetBase
 
 class CustomDataset(DetectionDatasetBase):
@@ -80,6 +79,9 @@ Two dunder methods must be implemented:
 
 Here is a sample implementation:
 ```
+import random
+...
+
 def __init__(self, root,
              scale_anchors, strides,
              default_input_size, ignore_threshold,
@@ -123,16 +125,19 @@ def __init__(self, root,
 def __len__(self) -> int:
     return len(self.img_paths)
 ```
-### 3) Define a `get_imgs(...)` Method
+### 3) Define a `get_imgs(...)` Method for `CustomDataset` 
 This method should take in an integer `idx` as input and return the corresponding dataset image as a **PIL Image** in **RGB** format.
 
 Here is an example, assuming that `CustomDataset` was initalized with a list of image file paths.
 ```
+from PIL import Image
+...
+
 def get_imgs(self, idx: int) -> Image.Image:
     pil_img = Image.open(self.img_paths[idx])
     return pil_img.convert('RGB')
 ```
-### 4) Define a `get_anno_info(...)` Method
+### 4) Define a `get_anno_info(...)` Method for `CustomDataset` 
 This method should take in an integer `idx` as input and return an annotation information dictionary for the corresponding dataset image.
 The return dictionary should have the following keys:
   - `labels (torch.Tensor)`: A tensor of class label indices of each object in the image.
@@ -144,6 +149,10 @@ The return dictionary should have the following keys:
   
 This method may look like:
 ```
+import torch
+from torchvision.tv_tensors import BoundingBoxes
+...
+
 def get_anno_info(self, idx: int) -> dict:
     # Retrieve label and bounding box info for the image at `idx`
     ...
