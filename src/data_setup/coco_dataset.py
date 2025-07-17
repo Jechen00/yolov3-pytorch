@@ -108,7 +108,6 @@ class COCODataset(DetectionDatasetBase):
         label_path = os.path.join(root, 'coco.names') # Path to COCO class labels
 
         # Initialize base detection dataset attributes 
-            #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
         super().__init__(
             root = root, 
             label_path = label_path, 
@@ -220,7 +219,7 @@ class COCODataset(DetectionDatasetBase):
                                                                                          Shape is (num_objects,).
                                                                 - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
                                                                                          in XYXY format and in pixel units 
-                                                                                         (canvas is the image size). 
+                                                                                         (canvas_size is the image size). 
                                                                                          Shape is (num_objects, 4).
         '''
         filename_to_annos = defaultdict(list)

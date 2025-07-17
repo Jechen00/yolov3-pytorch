@@ -117,7 +117,6 @@ class VOCDataset(DetectionDatasetBase):
         label_path = os.path.join(root, 'voc.names') # Path to VOC class names
 
         # Initialize base detection dataset attributes 
-            #  (scale_anchors, fmap_sizes, classes, single_resize, etc.)
         super().__init__(
             root = root, 
             label_path = label_path, 
@@ -206,11 +205,11 @@ class VOCDataset(DetectionDatasetBase):
             Dict[str, Any]: Annotation dictionary for the original image at index `idx`,
                             before any additional transforms are applied. It consists of the keys:
                                 - labels (torch.Tensor): Tensor of label indices for each object. 
-                                                            Shape is (num_objects,).
+                                                         Shape is (num_objects,).
                                 - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
-                                                            in XYXY format and in pixel units 
-                                                            (canvas is the image size). 
-                                                            Shape is (num_objects, 4).
+                                                         in XYXY format and in pixel units 
+                                                         (canvas_size is the image size). 
+                                                         Shape is (num_objects, 4).
         '''
         xml_root = ET.parse(self.anno_paths[idx]).getroot()
         size = xml_root.find('size')

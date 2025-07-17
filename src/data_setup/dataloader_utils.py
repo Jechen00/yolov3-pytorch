@@ -293,6 +293,10 @@ class MultiScaleBatchSampler(Sampler):
             assert multiscale_sizes is not None, (
                 'If `multiscale_interval` is provided for multiscale training, `multiscale_sizes` must not be None.'
             )
+
+            self.multiscale_sizes = [misc.make_tuple(size) for size in multiscale_sizes]
+        else:
+            self.multiscale_sizes = multiscale_sizes
             
         self.sampler = sampler
         self.dataset = dataset
@@ -300,7 +304,6 @@ class MultiScaleBatchSampler(Sampler):
         self.drop_last = drop_last
         self.default_input_size = misc.make_tuple(default_input_size)
         self.multiscale_interval = multiscale_interval
-        self.multiscale_sizes = [misc.make_tuple(size) for size in multiscale_sizes]
         
     def __iter__(self) -> Iterator[List[Tuple[int, Tuple[int, int]]]]:
         '''

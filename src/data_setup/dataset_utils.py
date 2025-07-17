@@ -183,7 +183,6 @@ class DetectionDatasetBase(ABC, Dataset):
     Args:
         root (str): The directory to download the dataset to, if needed.
         label_path (str): The path to a `.names` file to load class labels.
-        display_name (str): Display name used to represent the dataset when printed by `__repr__`.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in units of the input size (pixels).
@@ -214,6 +213,7 @@ class DetectionDatasetBase(ABC, Dataset):
                                For example, if the input image size is (416, 416) and `min_box_scale = 0.01`, 
                                the minimum height and width for valid bounding boxes is 416*0.01 = 4.16 pixels.
                                Default is 0.01.
+        display_name (optional, str): Display name used to represent the dataset when printed by `__repr__`.
 
     Note: while `scale_anchors` is a required parameter, 
     they can be optionally regenerated using the method `regenerate_scale_anchors(...)`.
@@ -222,7 +222,6 @@ class DetectionDatasetBase(ABC, Dataset):
     def __init__(self, 
                  root: str,
                  label_path: str,
-                 display_name: str,
                  scale_anchors: List[torch.Tensor],
                  strides: List[Union[int, Tuple[int, int]]],
                  ignore_threshold: float = 0.5,
@@ -232,12 +231,12 @@ class DetectionDatasetBase(ABC, Dataset):
                  post_multi_augs: Optional[Callable] = None,
                  multi_aug_prob: float = 0.0,
                  mixup_alpha: float = 1.0,
-                 min_box_scale: float = 0.01):
+                 min_box_scale: float = 0.01,
+                 display_name: Optional[str] = None):
         super().__init__()
 
         self.root = root
         self.label_path = label_path
-        self.display_name = display_name
         self.scale_anchors = scale_anchors
         self.strides = [misc.make_tuple(stride) for stride in strides]
         self.default_input_size = misc.make_tuple(default_input_size)
@@ -248,6 +247,7 @@ class DetectionDatasetBase(ABC, Dataset):
         self.multi_aug_prob = multi_aug_prob
         self.mixup_alpha = mixup_alpha
         self.min_box_scale = min_box_scale
+        self.display_name = '' if display_name is None else display_name
         
         self.mixup_beta_dist = torch.distributions.Beta(mixup_alpha, mixup_alpha)
         self.multi_aug_map = {
@@ -824,10 +824,10 @@ class DetectionDatasetBase(ABC, Dataset):
             Dict[str, Any]: Annotation dictionary for the original image at index `idx`,
                             before any additional transforms are applied. It consists of the keys:
                                 - labels (torch.Tensor): Tensor of label indices for each object. 
-                                                            Shape is (num_objects,).
+                                                         Shape is (num_objects,).
                                 - boxes (BoundingBoxes): BoundingBox object storing bounding box coordinates
-                                                            in XYXY format and in pixel units 
-                                                            (canvas is the image size). 
-                                                            Shape is (num_objects, 4).
+                                                         in XYXY format and in pixel units 
+                                                         (canvas_size is the image size). 
+                                                         Shape is (num_objects, 4).
         '''
         pass
