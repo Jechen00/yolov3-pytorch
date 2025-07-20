@@ -23,18 +23,18 @@ dataloader:
   # scale_anchors, strides, and default_input_size inherited from model
   root: ./data/voc
   dataset_name: voc
+  max_imgs: null
+
   batch_size: 32
   num_workers: 10
   ignore_threshold: 0.5
-
+  min_box_scale: 0.01
+  
   multi_augs: [mosaic, mixup]
   multi_aug_prob: 0.85
   mixup_alpha: 2.0
   multiscale_interval: 10
   multiscale_sizes: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608]
-
-  min_box_scale: 0.01
-  max_imgs: null
 
 
 # Loss Function Configs

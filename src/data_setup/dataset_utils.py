@@ -83,7 +83,6 @@ def load_classes(
 
         If `return_idx_maps = True`:
             class_to_idx (dict): Dictionary mapping class labels to a unique index.
-            idx_to_class (dict): Dictionary mapping unique indices to their class labels.
     '''
     with open(label_path, 'r') as f:
         class_names = [line.strip() for line in f if line.strip()]
@@ -181,7 +180,7 @@ class DetectionDatasetBase(ABC, Dataset):
     This is not meant to be instantiated alone.
     
     Args:
-        root (str): The directory to download the dataset to, if needed.
+        root (str): Root directory where the dataset should be stored or loaded from.
         label_path (str): The path to a `.names` file to load class labels.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 

@@ -44,7 +44,10 @@ class COCODataset(DetectionDatasetBase):
     The validation/testing set consists of the remaining ~5k images from val2014.
 
     Args:
-        root (str): The directory to download the dataset to, if needed.
+        root (str): The directory to images and annotations folders containing the 
+                    relavant 2014 MS COCO train and/or val data.
+                    See `COCO_2014_URLS` for the specific folder names.
+                    If the specified folders don't exist in `root`, they will be downloaded.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in units of the input size (pixels).
@@ -56,7 +59,8 @@ class COCODataset(DetectionDatasetBase):
                                                           when no specific size is provided.
                                                           If a `tuple`, it should be (height, width). 
                                                           If an `int`, it is assumed to be square.
-        train (bool): Whether to construct the training dataset or the validation/testing dataset.
+        split (Literal['train', 'val']): Whether to construct the training dataset ('train') or the validation dataset ('val').
+                                         Default is 'train'.
         ignore_threshold (float): IoU threshold used during target encoding to determine which anchors should be ignored.
                                   Anchors with an IoU greater than `ignore_threshold`, but are not the best matching anchor for an object 
                                   will be ignored in loss calculations (they are not treated as negatives and have P(object) = -1).
@@ -85,7 +89,7 @@ class COCODataset(DetectionDatasetBase):
                  scale_anchors: List[torch.Tensor],
                  strides: List[Union[int, Tuple[int, int]]],
                  default_input_size: Union[int, Tuple[int, int]] = (416, 416),
-                 train: bool = True, 
+                 split: Literal['train', 'val'] = 'train', 
                  ignore_threshold: float = 0.5,
                  single_augs: Optional[Callable] = None,
                  multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
@@ -94,14 +98,21 @@ class COCODataset(DetectionDatasetBase):
                  mixup_alpha: float = 0.5,
                  min_box_scale: float = 0.01,
                  max_imgs: Optional[int] = None):
-        self.train = train
+        assert split in ['train', 'val'], (
+            "Invalid dataset split: expected 'train' or 'val'. "
+            "If you're using this dataset for testing purposes, consider setting `split='val'`."
+        )
+        if max_imgs is not None:
+            assert max_imgs > 0, ('Must have `max_imgs > 0` or `max_imgs = None`')
+
+        self.split = split
         self.max_imgs = max_imgs
         
-        if train:
+        if split == 'train':
             data_keys = ['train2014', 'val2014', 'anno2014']
             part_file = os.path.join(root, 'trainvalno5k.part') # Path to partition file
             display_name = 'MS COCO 2014 TrainVal35K'
-        else:
+        elif split == 'val':
             data_keys = ['val2014', 'anno2014']
             part_file = os.path.join(root, '5k.part') # Path to partition file
             display_name = 'MS COCO 2014 Val5K'
@@ -147,21 +158,18 @@ class COCODataset(DetectionDatasetBase):
         # Maps image filenames to their annotations (dictionaries with labels and bounding boxes)
         self.filename_to_annos = self._load_annotations(data_keys = data_keys[:-1])
         
-        # Reduce dataset size
-        if max_imgs is not None:
-            assert max_imgs > 0, ('Must have `max_imgs > 0` or `max_imgs = None`')
-            max_imgs = min(max_imgs, self.__len__())
-
+        # Optionally reduce dataset size
+        if (max_imgs is not None) and (max_imgs < self.__len__()):
             samp_idxs = random.sample(range(self.__len__()), max_imgs)
+
             self.img_paths = [self.img_paths[i] for i in samp_idxs]
-            
             selected_filenames = set(os.path.basename(p) for p in self.img_paths)
             self.filename_to_annos = {k: v for k, v in self.filename_to_annos.items() 
-                                      if k in selected_filenames}
+                                        if k in selected_filenames}
     
     def __len__(self) -> int:
         '''
-        Gives the number of images in the dataset.
+        Returns the number of images in the dataset.
         '''
         return len(self.img_paths)
 

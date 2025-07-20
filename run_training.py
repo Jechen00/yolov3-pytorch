@@ -85,12 +85,13 @@ if __name__ == '__main__':
     # -------------
     # Dataloader
     # -------------
-    train_builder, val_builder = dataloader_utils.get_dataloaders(
+    builders = dataloader_utils.get_dataloaders(
         scale_anchors = scale_anchors,
         strides = strides,
         default_input_size = base_model_cfgs['input_shape'][-1],
         return_builders = True,
         device = device,
+        splits = ['train', 'val'],
         **configs['dataloader']
     )
 
@@ -136,8 +137,8 @@ if __name__ == '__main__':
     # ---------------------------
     train_losses, val_losses, eval_history = engine.train(
         base_model = base_model,
-        train_builder = train_builder,
-        val_builder = val_builder,
+        train_builder = builders['train'],
+        val_builder = builders['val'],
         loss_fn = loss_fn,
         optimizer = optimizer,
         scheduler = scheduler,

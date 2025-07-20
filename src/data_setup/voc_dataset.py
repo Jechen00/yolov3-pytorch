@@ -53,7 +53,10 @@ class VOCDataset(DetectionDatasetBase):
     The validation/test set is the test data from Pascal VOC 2007.
 
     Args:
-        root (str): The directory to download the dataset to, if needed.
+        root (str): The directory to the VOCdevit folder containing the 
+                    relevant 2007 and 2012 Pascal VOC trainval and/or test data. 
+                    See `VOC_DATA_URLS` for the specific folder names.
+                    If the specified folders does not exist in `root`, the dataset will be downloaded.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in units of the input size (pixels).
@@ -65,7 +68,8 @@ class VOCDataset(DetectionDatasetBase):
                                                           when no specific size is provided.
                                                           If a `tuple`, it should be (height, width). 
                                                           If an `int`, it is assumed to be square.
-        train (bool): Whether to construct the training dataset or the validation/testing dataset.
+        split (Literal['train', 'val']): Whether to construct the training dataset ('train') or the validation dataset ('val').
+                                         Default is 'train'.
         ignore_threshold (float): IoU threshold used during target encoding to determine which anchors should be ignored.
                                   Anchors with an IoU greater than `ignore_threshold`, but are not the best matching anchor for an object 
                                   will be ignored in loss calculations (they are not treated as negatives and have P(object) = -1).
@@ -94,7 +98,7 @@ class VOCDataset(DetectionDatasetBase):
                  scale_anchors: List[torch.Tensor],
                  strides: List[Union[int, Tuple[int, int]]],
                  default_input_size: Union[int, Tuple[int, int]] = (416, 416),
-                 train: bool = True, 
+                 split: Literal['train', 'val'] = 'train', 
                  ignore_threshold: float = 0.5,
                  single_augs: Optional[Callable] = None,
                  multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
@@ -103,14 +107,21 @@ class VOCDataset(DetectionDatasetBase):
                  mixup_alpha: float = 0.5,
                  min_box_scale: float = 0.01,
                  max_imgs: Optional[int] = None):
-        self.train = train
+        assert split in ['train', 'val'], (
+            "Invalid dataset split: expected 'train' or 'val'. "
+            "If you're using this dataset for testing purposes, consider setting `split='val'`."
+        )
+        if max_imgs is not None:
+            assert max_imgs > 0, ('Must have `max_imgs > 0` or `max_imgs = None`')
+
+        self.split = split
         self.max_imgs = max_imgs
         
-        if train:
+        if split == 'train':
             data_keys = ['trainval2007', 'trainval2012']
             id_txt = 'trainval.txt'
             display_name = 'Pascal VOC 2012+2007'
-        else:
+        elif split == 'val':
             data_keys = ['test2007']
             id_txt = 'test.txt'
             display_name = 'Pascal VOC 2007 Test'
@@ -166,16 +177,16 @@ class VOCDataset(DetectionDatasetBase):
             self.img_paths += imgs
             self.anno_paths += annos
         
-        if max_imgs is not None:
-            assert max_imgs > 0, 'Must have `max_imgs` > 0'
-
+        # Optionally reduce dataset size
+        if (max_imgs is not None) and (max_imgs < self.__len__()):
             samp_idxs = random.sample(range(self.__len__()), max_imgs)
+
             self.img_paths = [self.img_paths[i] for i in samp_idxs]
             self.anno_paths = [self.anno_paths[i] for i in samp_idxs]
 
     def __len__(self) -> int:
         '''
-        Gives the number of images in the dataset.
+        Returns the number of images in the dataset.
         '''
         return len(self.img_paths)
     
@@ -215,7 +226,6 @@ class VOCDataset(DetectionDatasetBase):
         size = xml_root.find('size')
         canvas_size = (int(size.find('height').text),  int(size.find('width').text))
 
-        info_dict = {}
         labels, bboxes = [], []
         for obj in xml_root.findall('object'):
             labels.append(self.class_to_idx[obj.find('name').text])
@@ -227,8 +237,21 @@ class VOCDataset(DetectionDatasetBase):
                  float(bnd_box.find('xmax').text), 
                  float(bnd_box.find('ymax').text)]
             )
+        
+        if len(bboxes) > 0:
+            # Every image in VOC should have an object
+            anno_info = {
+                'labels': torch.tensor(labels, dtype = torch.long),
+                'boxes': BoundingBoxes(
+                    data = torch.tensor(bboxes, dtype = torch.float32), 
+                    format = 'XYXY', 
+                    canvas_size = canvas_size)
+            }
+        else:
+            anno_info = {
+                    'labels': torch.empty(0, dtype = torch.long),
+                    'boxes': BoundingBoxes(data = torch.empty((0, 4)), format = 'XYXY', 
+                                           canvas_size = canvas_size)
+            }
 
-        info_dict['labels'] = torch.tensor(labels)
-        info_dict['boxes'] = BoundingBoxes(torch.tensor(bboxes, dtype = torch.float32), 
-                                           format = 'XYXY', canvas_size = canvas_size)
-        return info_dict
+        return anno_info

@@ -8,9 +8,10 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import Sampler, RandomSampler
 
 import random, math
-from typing import List, Union, Tuple, Iterable, Optional, Literal, Iterator
+from typing import List, Union, Tuple, Iterable, Optional, Literal, Iterator, Dict
 
 from src.data_setup import coco_dataset, voc_dataset, transforms
+from src.data_setup.dataset_utils import DetectionDatasetBase
 from src.utils import misc
 
 
@@ -52,23 +53,28 @@ def yolov3_collate_fn(batch: List[tuple]):
 
 def get_dataloaders(
     root: str, 
-    dataset_name: Literal['coco', 'voc'],
     batch_size: int, 
     scale_anchors: List[torch.Tensor],
     strides: List[Union[int, Tuple[int, int]]],
     default_input_size: Union[int, Tuple[int, int]],
+
+    dataset_class: Optional[DetectionDatasetBase] = None,
+    dataset_name: Optional[Literal['coco', 'voc']] = None,
+    splits: Optional[List[Literal['train', 'val', 'test']]] = None,
+    max_imgs: Optional[Union[int, List[Optional[int]]]] = None,
+
     ignore_threshold: float = 0.5,
     multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
     multi_aug_prob: float = 0.0,
     mixup_alpha: float = 0.5,
     multiscale_interval: Optional[int] = None,
     multiscale_sizes: Optional[List[Union[int, Tuple[int, int]]]] = None,
-    max_imgs: Optional[Union[int, Tuple[int, int]]] = None,
     min_box_scale: float = 0.01,
+
     num_workers: int = 0,
     device: Union[torch.device, str] = 'cpu',
-    return_builders = True
-) -> Union[Tuple[DataLoader, DataLoader], Tuple[DataLoaderBuilder, DataLoaderBuilder]]:
+    return_builders = True,
+) -> Union[Dict[str, DataLoader], Dict[str, DataLoaderBuilder]]:
     '''
     Creates training and validation/testing dataloaders for a dataset in DATASETS.
     
@@ -80,12 +86,10 @@ def get_dataloaders(
         The validation/test set is the test data from Pascal VOC 2007.
 
     Args:
-        root (str): Path to download datasets, if needed.
-        dataset_name (str): Dataset key indicating which dataset to use for the dataloaders. 
-                            Must be a key from DATASETS.
+        root (str): Root directory where the dataset should be stored or loaded from.
+                    The necessary folders to construct the training, validation, and/or testing splits
+                    should be plcaed here.
         batch_size (int): Size used to split the datasets into batches.
-        num_workers (int): Number of workers to use for multiprocessing. Default is 0.
-        device (torch.device or str): The device expected to conduct training on. Default is 'cpu'.
         scale_anchors (List[torch.tensor]): List of anchor tensors for each detection scale of the model.
                                             Each element has shape: (num_anchors, 2), where the last dimension gives 
                                             the (width, height) of the anchor in unit of the input size (pixels).
@@ -94,6 +98,32 @@ def get_dataloaders(
                                                      and the feature map at that scale.
         default_input_size (int or Tuple[int, int]): A default input image size (height, width) to resize the images to.
                                                      If `int`, resizing is assumed to be square.
+
+        dataset_class (optional, DetectionDatasetBase): A subclass of `DetectionDatasetBase` to construct dataloaders for.
+                                                        Must support the following arguments in its initalizer:
+                                                            - `split` (e.g., 'train', 'val', or 'test'): to indicate the dataset split.
+                                                            - `max_imgs` (optional, int): to limit the number of images loaded.
+                                                        If not provided, `dataset_name` is required.
+                                                        Default is None.
+        dataset_name (optional, str): Name of the dataset to use for the dataloaders.
+                                      This should be a key in the `DATASETS` registry.
+                                      If `dataset_class` is provided, this argument is ignored.
+                                      If this argument is not provided, `dataset_class` is required.
+                                      Default is None.
+        splits (optional, List[Literal['train', 'val', 'test']]): The list of dataset splits to create dataloaders for.
+                                                                  This can be for the training ('train'), validation ('val'), 
+                                                                  or testing ('test') datasets. 
+                                                                  Please make sure that the dataset you are using accepts these splits 
+                                                                  (for instance, the dataset may not have a test split).
+                                                                  If not provided, this defaults to `['train', 'val']` 
+                                                                  for the training and validation splits. Default is None.
+        max_imgs (Optional[Union[int, List[Optional[int]]]]): Specifies the maximum number of images to include for each dataset split.
+                                    - If a list of integers or None (`List[Optional[int]]`), it must have the same length as `splits`.
+                                        - If an element is `None`, no maximum limit is applied for that split.
+                                    - If a single integer (`int`), that value is applied as the maximum limit for all dataset splits.
+                                    - If not provided (`None`), no maximum limit is applied to any split.
+                                    Default is None.
+
         ignore_threshold (float): The IoU threshold used to encode which anchor boxes will be ignored during loss calculation.
                                   Anchor boxes that do not have the highest IoU with a ground truth box, 
                                   but have an IoU >= ignore_threshold, 
@@ -108,37 +138,40 @@ def get_dataloaders(
         multiscale_sizes (optional, List[Union[int, Tuple[int, int]]]): List of input sizes to use during multiscale training.
                                                                         Elements can be ints (assumed square) or (H, W) tuples.
                                                                         Example: [320, (416, 416), 608]. Default is None.
-        max_imgs (optional, Union[int, Tuple[int, int]]): The maximum number of images to include for 
-                                                          the training dataset (`max_imgs[0]`) and validation dataset (`max_imgs[1]`).
-                                                          If `max_imgs[i] = None`, no maximum count is applied.
         min_box_scale (float): The Minimum scale of box width and height relative to the image dimensions.
                                Boxes smaller than this ratio in either dimension are discarded.
                                Default is 0.01 to represent 1% of the image width and height.
+
+        num_workers (int): Number of workers to use for multiprocessing. Default is 0.
+        device (torch.device or str): The device expected to conduct training on. Default is 'cpu'.
         return_builders (bool): Whether to return `DataLoaderBuilder` instances rather than the `DataLoader` instances themselves.
                                 The `Dataloaders` can then be created with `DataLoaderBuilder.build()`.
+                                Default is True.
 
     Returns:
-        If `return_builders = True`:
-            - train_builder (DataLoaderBuilder): The DataloaderBuilder used to construct the DataLoader for the training set.
-            - test_builder (DataLoaderBuilder): The DataloaderBuilder used to construct the DataLoader for the validation/test set.
-        If `return_builders = False`:
-            - train_loader (DataLoader): Dataloader for the training set.
-            - test_loader (DataLoader): Dataloader for the validation/test set.
+        loaders (Dict[str, Union[DataLoader, DataLoaderBuilder]]): Dictionary mapping dataset splits to
+                their dataloaders builders (`return_builders = True`) or dataloader (`return_builders = False`).
     '''
-    assert dataset_name in DATASETS.keys(), (
-        f'`dataset` must be in {list(DATASETS.keys())}'
+
+    assert dataset_name is not None or dataset_class is not None, (
+        'Either `dataset_class` or `dataset_name` must be provided'
     )
 
-    # Create datasets
-    dataset_class = DATASETS[dataset_name]
-    max_imgs = misc.make_tuple(max_imgs)
+    if dataset_class is None:
+        assert dataset_name in DATASETS.keys(), (
+            f'`dataset_name` must be in {list(DATASETS.keys())}'
+        )
+        dataset_class = DATASETS[dataset_name]
 
-    # Resizing and pixel rescaling for single images will be handled inside the dataset.
-    train_single_augs = transforms.get_single_transforms(train = True, aug_only = True)
-    train_post_multi_augs = transforms.get_post_multi_transforms(aug_only = True)
+    splits = ['train', 'val'] if splits is None else splits # Set default for dataset splits
+    if isinstance(max_imgs, list):
+        assert len(max_imgs) == len(splits), (
+            f'The length of `max_imgs` ({len(max_imgs)}) must match the length of `splits` ({len(splits)})'
+        )
+    else:
+        # If max_imgs is a single int or None, replicate it for each split
+        max_imgs = [max_imgs] * len(splits)
 
-    test_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
-    
     common_dataset_kwargs = {
         'root': root,
         'scale_anchors': scale_anchors,
@@ -147,22 +180,13 @@ def get_dataloaders(
         'ignore_threshold': ignore_threshold,
         'min_box_scale': min_box_scale
     }
-    train_dataset = dataset_class(train = True, 
-                                  single_augs = train_single_augs,
-                                  post_multi_augs = train_post_multi_augs,
-                                  multi_augs = multi_augs,
-                                  multi_aug_prob = multi_aug_prob,
-                                  mixup_alpha = mixup_alpha,
-                                  max_imgs = max_imgs[0],
-                                  **common_dataset_kwargs)
 
-    test_dataset = dataset_class(train = False, 
-                                 single_augs = test_single_augs,
-                                 multi_aug_prob = 0.0,
-                                 max_imgs = max_imgs[1],
-                                 **common_dataset_kwargs)
+    # Resizing and pixel rescaling for single images will be handled inside the dataset.
+    train_single_augs = transforms.get_single_transforms(train = True, aug_only = True)
+    train_post_multi_augs = transforms.get_post_multi_transforms(aug_only = True)
+    valtest_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
 
-    # Create dataloaders
+    # Set device-dependent dataloader configs:
     device = torch.device(device)
     if device.type == 'cuda':
         mp_context = None
@@ -180,45 +204,65 @@ def get_dataloaders(
         mp_context = None
         persistent_workers = False
 
-    train_sampler = MultiScaleBatchSampler(
-        sampler = RandomSampler(train_dataset),
-        dataset = train_dataset,
-        batch_size = batch_size,
-        default_input_size = default_input_size,
-        drop_last = False,
-        multiscale_interval = multiscale_interval,
-        multiscale_sizes = multiscale_sizes
-    )
+    # Create dataloaders or their builders
+    loaders = {} # Dictionary to store dataloaders or their builders
+    for i, split in enumerate(splits):
+        if split == 'train':
+            dataset = dataset_class(split = split,
+                                    single_augs = train_single_augs,
+                                    post_multi_augs = train_post_multi_augs,
+                                    multi_augs = multi_augs,
+                                    multi_aug_prob = multi_aug_prob,
+                                    mixup_alpha = mixup_alpha,
+                                    max_imgs = max_imgs[i],
+                                    **common_dataset_kwargs)
+            
+            sampler = MultiScaleBatchSampler(
+                sampler = RandomSampler(dataset),
+                dataset = dataset,
+                batch_size = batch_size,
+                default_input_size = default_input_size,
+                drop_last = False,
+                multiscale_interval = multiscale_interval,
+                multiscale_sizes = multiscale_sizes
+            )
 
-    train_loader_kwargs = {
-        'collate_fn': yolov3_collate_fn,
-        'batch_sampler': train_sampler,
-        'num_workers': num_workers,
-        'multiprocessing_context': mp_context,
-        'pin_memory': pin_memory,
-        'persistent_workers': persistent_workers
-    }
+            loader_kwargs = {
+                'collate_fn': yolov3_collate_fn,
+                'batch_sampler': sampler,
+                'num_workers': num_workers,
+                'multiprocessing_context': mp_context,
+                'pin_memory': pin_memory,
+                'persistent_workers': persistent_workers
+            }
 
-    # Multiscale isn't used for testing/validation
-    test_loader_kwargs = {
-        'collate_fn': yolov3_collate_fn,
-        'batch_size': batch_size,
-        'shuffle': False,
-        'num_workers': num_workers,
-        'multiprocessing_context': mp_context,
-        'pin_memory': pin_memory,
-        'persistent_workers': persistent_workers
-    }
+        else:
+            dataset = dataset_class(split = split,
+                                    single_augs = valtest_single_augs,
+                                    multi_aug_prob = 0.0,
+                                    max_imgs = max_imgs[i],
+                                    **common_dataset_kwargs)
+                    
+            # Multiscale, mosaic, and shuffling isn't used for testing/validation
+                # No custom sampler needed
+            loader_kwargs = {
+                'collate_fn': yolov3_collate_fn,
+                'batch_size': batch_size,
+                'shuffle': False,
+                'num_workers': num_workers,
+                'multiprocessing_context': mp_context,
+                'pin_memory': pin_memory,
+                'persistent_workers': persistent_workers
+            }
 
-    train_builder = DataLoaderBuilder(dataset = train_dataset, dataloader_kwargs = train_loader_kwargs)
-    test_builder = DataLoaderBuilder(dataset = test_dataset, dataloader_kwargs = test_loader_kwargs)
+        builder = DataLoaderBuilder(dataset = dataset, dataloader_kwargs = loader_kwargs)
 
-    if return_builders:
-        return train_builder, test_builder
-    else:
-        train_loader = train_builder.build()
-        test_loader = test_builder.build()
-        return train_loader, test_loader
+        if return_builders:
+            loaders[split] = builder
+        else:
+            loaders[split] = builder.build()
+
+    return loaders
 
 
 #####################################

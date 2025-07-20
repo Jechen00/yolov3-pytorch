@@ -57,6 +57,8 @@ pip install torchmetrics==1.7.2
 
 <br></br>
 ## Custom Dataset Instructions
+An demonstration for how to create a custom dataset class can be found in this [Jupyter Notebook](https://github.com/Jechen00/yolov3-pytorch/blob/main/notebooks/custom_dataset_demo.ipynb).
+
 ### 1) Create a `.names` File
 This is a plain text file listing all class names in your custom dataset, with one class per line.
 For a reference: [data/voc/voc.names](https://github.com/Jechen00/yolov3-pytorch/blob/main/data/voc/voc.names)
@@ -73,8 +75,8 @@ class CustomDataset(DetectionDatasetBase):
 Two dunder methods must be implemented:
   - `__init__(...)`: Initializes the dataset. 
       -  Must call `super().__init__(...)` with all [expect arguments](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataset_utils.py#L178)
-      -  It should include a `train` argument (bool) to distinguish between training and testing splits.
-      -  It should include a `max_imgs` argument (int) to optionally limit the number of images loaded.
+      -  Must include a `split` argument (typically a Literal['train', 'val', 'test']) to indicate training, validation, and/or testing splits.
+      -  Must include a `max_imgs` argument (int) to optionally limit the number of images loaded.
   - `__len__(...)`: Returns the number of images in the dataset.
 
 Here is a sample implementation:
@@ -88,8 +90,8 @@ def __init__(self, root,
              single_augs, multi_augs,
              post_multi_augs, multi_aug_prob,
              mixup_alpha, min_box_scale,
-             train = True,
-             max_imgs = None):
+             split: Literal['train', 'val'] = 'train',
+             max_imgs: Optional[int] = None):
   
   display_name = 'Custom Dataset'
   label_path = PATH_TO_NAMES_FILE # Replace with the actual path to your .names file
@@ -112,20 +114,20 @@ def __init__(self, root,
   )
 
   # An example list of image file paths or image identifiers. Can be replaced with however images are stored/tracked
-  if train:
+  if split == 'train':
       self.img_paths = TRAIN_IMAGE_PATHS # Length needs to match the number of training images.
-  else:
-      self.img_paths = TEST_IMAGE_PATHS # Length needs to match the number of testing images.
+  elif split == 'val':
+      self.img_paths = VAL_IMAGE_PATHS # Length needs to match the number of validation images.
 
   # Optionally reduce dataset size
-  if max_imgs is not None:
+  if (max_imgs is not None) and (max_imgs < self.__len__()):
       samp_idxs = random.sample(range(self.__len__()), max_imgs)
       self.img_paths = [self.img_paths[i] for i in samp_idxs]
 
 def __len__(self) -> int:
     return len(self.img_paths)
 ```
-### 3) Define a `get_imgs(...)` Method for `CustomDataset` 
+### 3) Define a `get_img(...)` Method for `CustomDataset` 
 This method should take in an integer `idx` as input and return the corresponding dataset image as a **PIL Image** in **RGB** format.
 
 Here is an example, assuming that `CustomDataset` was initalized with a list of image file paths.
@@ -133,7 +135,7 @@ Here is an example, assuming that `CustomDataset` was initalized with a list of 
 from PIL import Image
 ...
 
-def get_imgs(self, idx: int) -> Image.Image:
+def get_img(self, idx: int) -> Image.Image:
     pil_img = Image.open(self.img_paths[idx])
     return pil_img.convert('RGB')
 ```
@@ -169,22 +171,46 @@ def get_anno_info(self, idx: int) -> dict:
         'boxes': boxes
     }
 ```
-### 5) Register Custom Dataset to Enable Dataloader Construction
-In [data_setup/dataloader_utils.py](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataloader_utils.py), add the custom dataset class to the `DATASETS` dictionary:
+### 5) (Optional) Register Custom Dataset for Dataloader Construction
+In [data_setup/dataloader_utils.py](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataloader_utils.py), you may optionally add the custom dataset class to the `DATASETS` dictionary:
 ```
 DATASETS = {
     'custom': CustomDataset,
-    ...
+    # Other datasets...
 }
 ```
-Dataloaders for the dataset can then be constructed with `data_setup.dataloader_utils.get_dataloaders`:
+Dataloaders can then be constructed with `data_setup.dataloader_utils.get_dataloaders(...)` in 2 ways:
+
+**Option 1: Using the Registered Dataset Name**
 ```
 from src.data_setup import dataloader_utils
 
-train_loader, val_loader = dataloader_utils.get_dataloaders(
+loaders = dataloader_utils.get_dataloaders(
     dataset_name = 'custom',
+    splits = ['train', 'val'],
+    return_builders = False
     ...
 )
+
+# Access the dataloaders for the dataset splits
+train_loaders = loaders['train']
+val_loaders = loaders['val']
+```
+
+**Option 2: Using the Dataset Class**
+```
+from src.data_setup import dataloader_utils
+
+loaders = dataloader_utils.get_dataloaders(
+    dataset_class = CustomDataset,
+    splits = ['train', 'val'],
+    return_builders = False
+    ...
+)
+
+# Access the dataloaders for the dataset splits
+train_loaders = loaders['train']
+val_loaders = loaders['val']
 ```
 
 
@@ -197,7 +223,7 @@ This allows for configuring _most_ settings, such as:
 - [Device (CPU, MPS, or CUDA)](https://docs.pytorch.org/docs/stable/tensor_attributes.html#torch.device)
 - [Model Architecture](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/models/builder.py#L121)
 - [EMA model Tracking](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/models/ema_model.py#L14)
-- [Dataloader (Supports Pascal VOC and COCO)](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataloader_utils.py#L53)
+- [Dataloader (Supports Pascal VOC and COCO)](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataloader_utils.py#L54)
 - [Loss Function](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/loss.py#L16)
 - [Optimizer (SGD)](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html)
 - [Learning Rate Scheduler (Cosine Annealing)](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/schedulers.py#L77)
