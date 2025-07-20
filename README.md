@@ -74,7 +74,7 @@ class CustomDataset(DetectionDatasetBase):
 
 Two dunder methods must be implemented:
   - `__init__(...)`: Initializes the dataset. 
-      -  Must call `super().__init__(...)` with all [expect arguments](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataset_utils.py#L178)
+      -  Must call `super().__init__(...)` with all [expect arguments](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/data_setup/dataset_utils.py#L177)
       -  Must include a `split` argument (typically a Literal['train', 'val', 'test']) to indicate training, validation, and/or testing splits.
       -  Must include a `max_imgs` argument (int) to optionally limit the number of images loaded.
   - `__len__(...)`: Returns the number of images in the dataset.
