@@ -68,7 +68,6 @@ if __name__ == '__main__':
     else:
         ema = None
 
-    # Device will be CUDA or MPS if they are avaliable (Change if needed)
     if device.type == 'cuda':
         base_model.compile(dynamic = True)
 

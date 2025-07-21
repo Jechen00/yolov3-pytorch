@@ -69,6 +69,8 @@ def yolov3_train_step(
     
     base_model.train()
     optimizer_steps = 0
+
+    optimizer.zero_grad()
     for i, (imgs, scale_targs) in enumerate(dataloader):
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
