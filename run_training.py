@@ -7,6 +7,7 @@ from torch import optim
 import os
 import yaml
 import argparse
+import math 
 
 from src.models import builder, ema_model
 from src.utils import constants, misc
@@ -109,12 +110,23 @@ if __name__ == '__main__':
         **configs['optimizer']
     )
 
+    scheduler_freq = configs['scheduler']['freq']
+    scheduler_timing_args = configs['scheduler']['timing_args']
+
+    # Change scheduler timing arguments depending on the frequency of steps
+    if scheduler_freq == 'optim_step':
+        effective_batch_size = configs['dataloader']['batch_size'] * configs['train_eval']['accum_steps']
+        num_optim_steps = math.ceil(len(builders['train'].dataset) / effective_batch_size)
+
+        for key, value in scheduler_timing_args.items():
+            scheduler_timing_args[key] = value * num_optim_steps
+
     scheduler = schedulers.WarmupCosineAnnealingLR(
         optimizer,
-        **configs['scheduler']
+        **configs['scheduler']['static_args'],
+        **scheduler_timing_args
     )
-
-
+    
     # ---------------------------
     # Data Class Configs
     # ---------------------------
@@ -141,6 +153,7 @@ if __name__ == '__main__':
         loss_fn = loss_fn,
         optimizer = optimizer,
         scheduler = scheduler,
+        scheduler_freq = scheduler_freq,
         ema = ema,
         te_cfgs = te_cfgs,
         ckpt_cfgs = ckpt_cfgs,

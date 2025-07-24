@@ -1,4 +1,4 @@
-# Note: These default configs are based on those used in notebooks/yolov3_training.ipynb (Used A100 in Google Colab)
+# Note: These configs are based on those used in notebooks/yolov3_training.ipynb (Used A100 in Google Colab)
 experiment: yolov3_voc           # YOLOv3 model training on Pascal VOC dataset
 
 # Device Configs
@@ -23,18 +23,18 @@ dataloader:
   # scale_anchors, strides, and default_input_size inherited from model
   root: ./data/voc
   dataset_name: voc
+  max_imgs: null
+
   batch_size: 32
   num_workers: 10
   ignore_threshold: 0.5
-
+  min_box_scale: 0.01
+  
   multi_augs: [mosaic, mixup]
-  multi_aug_prob: 0.85
-  mixup_alpha: 2.0
+  multi_aug_prob: 0.9
+  mixup_alpha: 2.5
   multiscale_interval: 10
   multiscale_sizes: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608]
-
-  min_box_scale: 0.01
-  max_imgs: null
 
 
 # Loss Function Configs
@@ -42,12 +42,12 @@ loss_fn:
   # scale_anchors and strides inherited from model
   lambda_coord: 1.5
   lambda_class: 0.3
-  lambda_conf: 0.5
+  lambda_conf: 1.0
   scale_weights: [0.8, 1, 1]      # Scale order: large, medium, small
 
   use_focal_conf: true            # Uses focal loss for object confidence
   alpha: 0.25
-  gamma: 1.0
+  gamma: 1.5
 
   softmax_probs: true             # Applies softmax (single-label) to class logits
   class_smoothing: 0.05           # Label smoothing used with softmax and cross-entropy
@@ -65,18 +65,22 @@ optimizer:
 
 # Learning Rate Scheduler Configs (Cosine Annealing with Warm-up)
 scheduler:
-  pre_warmup_lrs: 1.0e-4
-  T_max: 180
-  warmup_epochs: 5
-  eta_min: 1.0e-6
-  last_epoch: -1                  # Training from scratch
+  static_args:                    # Fixed/static scheduler args
+    pre_warmup_lrs: 1.0e-4
+    eta_min: 1.0e-6
+  
+  timing_args:                    # Timing-related scheduler args (interpreted as epochs, but scaled if freq = optim_step)
+    T_max: 180
+    warmup_steps: 5
+
+  freq: optim_step                # Scheduler step frequency: 'epoch' or 'optim_step'
 
 
 # Training/Evaluation Configs
 train_eval:
   # scale_anchors and strides inherited from model
   num_epochs: 180
-  accum_steps: 2                  # Effective batch size is 64
+  accum_steps: 1                  # No gradient accumulation
   ema_update_interval: 1
 
   eval_interval: 5                # Setting to null means no evaluations

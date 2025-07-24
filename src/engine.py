@@ -12,7 +12,7 @@ from torchmetrics.detection.mean_ap import MeanAveragePrecision
 import os
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Union, Dict, Tuple, Any
+from typing import List, Optional, Union, Dict, Tuple, Any, Literal
 
 from src import postprocess, evaluate, loss
 from src.data_setup.dataloader_utils import DataLoaderBuilder
@@ -33,6 +33,7 @@ def yolov3_train_step(
     dataloader: DataLoader,
     loss_fn: loss.YOLOv3Loss,
     optimizer: Optimizer,
+    scheduler: Optional[lr_scheduler._LRScheduler] = None,
     ema: Optional[EMA] = None,
     ema_update_interval: int = 1,
     accum_steps: int = 1,
@@ -48,6 +49,11 @@ def yolov3_train_step(
         loss_fn (loss.YOLOv3Loss): An instance of the YOLOv3Loss class used to compute the loss. 
                                    Gradients are computed from `loss_dict['total']` returned by its forward method.
         optimizer (Optimizer): Optimizer used to update `base_model` parameters every accumulated batch.
+        scheduler (optional, lr_scheduler._LRScheduler): Learning rate scheduler. 
+                                                         This updates the optimizer learning rates at every optimizer step.
+                                                         Make sure that the scheduler parameters (e.g. T_max for CosineAnnealing)
+                                                         account for this. 
+                                                         Default is None, which disables scheduling entirely.
         ema (optional, EMA): An instance of the EMA class to maintain EMA parameters of `base_model`.
                              This should already be on `device`.
                              If not provided, no EMA parameters are computed. Default is None.
@@ -67,9 +73,10 @@ def yolov3_train_step(
     num_samps = len(dataloader.dataset)
     loss_sums = {key: 0.0 for key in loss_fn.loss_keys}
     
-    base_model.train()
-    optimizer_steps = 0
+    full_accums = len(dataloader) // accum_steps # Number of full accumulation windows
+    optimizer_steps = 0 # Counter for number of optimizer steps
 
+    base_model.train()
     optimizer.zero_grad()
     for i, (imgs, scale_targs) in enumerate(dataloader):
         imgs = imgs.to(device)
@@ -80,7 +87,15 @@ def yolov3_train_step(
 
         # Compute loss for batch
         loss_dict = loss_fn(scale_logits, scale_targs)
-        (loss_dict['total'] / accum_steps).backward() # Backpropagate only through the total loss
+
+        if optimizer_steps != full_accums:
+            accum_size = accum_steps
+        else:
+            # All full accumulation windows have been processed 
+                # Last window (if any) is partial and accumulates the remainder of batch sizes
+            accum_size = len(dataloader) % accum_steps
+
+        (loss_dict['total'] / accum_size).backward() # Backpropagate only through the total loss
 
         for key in loss_sums:
             loss_sums[key] += loss_dict[key].detach() * batch_size
@@ -91,6 +106,10 @@ def yolov3_train_step(
             optimizer.step()
             optimizer.zero_grad()
             optimizer_steps += 1
+
+            if scheduler is not None:
+                # Update optimizer learning rates per optimizer step
+                scheduler.step()
 
             # Update EMA model if needed
             if ema is not None:
@@ -202,6 +221,9 @@ def yolov3_val_step(
             model_trackers['ema']['eval_res'] = model_trackers['base']['eval_res'].copy()
             model_trackers['ema']['map_metric'] = MeanAveragePrecision(**kwargs)
 
+        for tracker in model_trackers.values():
+            tracker['map_metric'].warn_on_many_detections = False
+
     # -------------------------
     # Validation Loop
     # -------------------------
@@ -267,6 +289,7 @@ def train(
     te_cfgs: TrainEvalConfigs,
     ckpt_cfgs: CheckpointConfigs,
     scheduler: Optional[lr_scheduler._LRScheduler] = None,
+    scheduler_freq: Literal['epoch', 'optim_step'] = 'epoch',
     ema: Optional[EMA] = None,
     device: Union[torch.device, str] = 'cpu'
 ) -> Tuple[TrainLosses, ValLosses, EvalHistories]:
@@ -277,8 +300,8 @@ def train(
     
     The flow of each epoch is as follows:
         - Computes training loss
-        - Updates the base model and optionally the EMA model 
-        - Optionally steps optimizer (Note that this happens after the training loop)
+        - Updates the base model (using optimizer) and optionally the EMA model 
+        - Optionally steps scheduler (Note that this happens either during or after the training loop)
         - Computes validation losses per epoch
         - Optionally computes mAP/mAR at evaluation epochs
         - Optionally saves checkpoint
@@ -295,6 +318,17 @@ def train(
                                                          If provided and resuming from a checkpoint (`ckpt_cfgs.resume = True`),
                                                          the checkpoint file at `ckpt_cfgs.resume_path` must also include a scheduler. 
                                                          Default is None, which disables scheduling entirely — even when resuming.
+        scheduler_freq (Literal['epoch', 'optim_step']): Defines how frequently `scheduler.step()` is called during training.
+                    - epoch: `scheduler.step()` is called at the end of each training loop (once per epoch).
+                    - optim_step: `scheduler.step()` is called after each optimizer step.
+
+                    Please make sure that the arguments of the scheduler (e.g. T_max for CosineAnnealing) account for this.
+                    For example:
+                        - If `scheduler_freq = 'epoch'`, you may set `T_max` to the total number of epochs.
+                        - If `scheduler_freq = 'optim_step'`, you may set `T_max` to the total number of optimizer steps,
+                          accounting for gradient accumulation if applicable.
+
+                    Default is `epoch`.
         ema (optional, EMA): An instance of the EMA class used to maintain an EMA of `base_model` parameters.
                              The model at `ema.ema_model` should already be on `device`.
         device (str or torch.device): The device to perform computations on. Default is 'cpu'.
@@ -362,21 +396,23 @@ def train(
     
     # Load checkpoint if needed
     if ckpt_cfgs.resume:
-        last_epoch, base_train_losses, val_losses, eval_histories = misc.load_checkpoint(
+        checkpoint_epoch, base_train_losses, val_losses, eval_histories = misc.load_checkpoint(
             checkpoint_path = ckpt_cfgs.resume_path,
             base_model = base_model,
             optimizer = optimizer,
             scheduler = scheduler,
             ema = ema
         )
+
+        start_epoch = checkpoint_epoch + 1
         print(
             f'{BOLD_START}[NOTE]{BOLD_END} '
             f'Successfully loaded checkpoint at {ckpt_cfgs.resume_path}. '
-            f'Resuming training from epoch {last_epoch + 1}.'
+            f'Resuming training from epoch {start_epoch}.'
         )
 
     else:
-        last_epoch = -1 # Starting training from scratch (epoch 0)
+        start_epoch = 0 # Starting training from scratch
         base_train_losses = {key: [] for key in loss_fn.loss_keys}
         val_losses = {
             'base': {key: [] for key in loss_fn.loss_keys}
@@ -390,9 +426,22 @@ def train(
             val_losses['ema'] = {key: [] for key in loss_fn.loss_keys}
             eval_histories['ema'] = {}
 
+    # Keyword arguments for the training step
+    train_kwargs = dict(
+        base_model = base_model, 
+        dataloader = train_loader,
+        loss_fn = loss_fn, 
+        optimizer = optimizer,
+        scheduler = None if scheduler_freq == 'epoch' else scheduler,
+        ema = ema,
+        accum_steps = te_cfgs.accum_steps, 
+        ema_update_interval = te_cfgs.ema_update_interval,
+        device = device
+    )
+
     # Start of training and evaluation
     print() # A line break between start logs and training logs
-    for epoch in range(last_epoch + 1, te_cfgs.num_epochs):
+    for epoch in range(start_epoch, te_cfgs.num_epochs):
         # Construct top divider indicating epoch number
         epoch_str = f' EPOCH {epoch:>3} '
         side_len = (divider_len - len(epoch_str)) // 2
@@ -430,19 +479,10 @@ def train(
                 train_loader = train_builder.build()
 
         # Compute average losses over batches, while updating models
-        train_avgs = yolov3_train_step(
-            base_model = base_model, 
-            dataloader = train_loader,
-            loss_fn = loss_fn, 
-            optimizer = optimizer,
-            ema = ema,
-            accum_steps = te_cfgs.accum_steps, 
-            ema_update_interval = te_cfgs.ema_update_interval,
-            device = device
-        )
-
-        # Update optimizer learning rates
-        if scheduler is not None:
+        train_avgs = yolov3_train_step(**train_kwargs)
+        
+        # Step scheduler if learning rates should only be updated at the end of each training loop
+        if (scheduler is not None) and (scheduler_freq == 'epoch'):
             scheduler.step() 
 
         # Store and log each average loss
@@ -531,7 +571,7 @@ def train(
                                  base_train_losses = base_train_losses,
                                  val_losses = val_losses,
                                  eval_histories = eval_histories,
-                                 last_epoch = epoch,
+                                 checkpoint_epoch = epoch,
                                  save_path = ckpt_cfgs.save_path)
         
         # Print all epoch logs

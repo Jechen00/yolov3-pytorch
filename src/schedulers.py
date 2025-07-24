@@ -87,28 +87,38 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
                                                from these values to the base learning rates over the warmup period.
                                                If provided a `float`, it is assumed that all parameter groups have the same
                                                `pre_warmup_lrs` value.
-        T_max (int): Maximum number of epochs over which to anneal the learning rate with a cosine curve. 
+        T_max (int): Maximum number of scheduler steps over which to anneal the learning rate with a cosine curve. 
                      The learning rate decays from `base_lr` to `eta_min` over this period.
-                     Must be greater than `warmup_epochs`. 
+                     After `T_max` scheduler steps, the learning rates will remain constant at `eta_min`.
+                     Must be greater than `warmup_steps`. 
         eta_min (float): Minimum learning rate from the scheduler. 
                          This is the learning rate after cosine annealing stops. Default is 0.0.
-        warmup_epochs (int): Number of epochs over which to linearly increase the learning rates from 
-                             pre_warmup_lrs to the base learning rates. 
-                             On epoch `warmup_epochs` learning rates will reach the base learning rates.
-                             If `warmup_epochs = 0`, the behavior of the scheduler will be the same as CosineAnnealingLR.
+        warmup_steps (int): Number of scheduler steps over which to linearly increase the learning rates from 
+                            `pre_warmup_lrs` to the base learning rates. 
+
+                            Example:
+                                If the `scheduler.step()` is called only at the end of every epoch and `warmup_steps = 5`,
+                                by the start of epoch 5, the learning rates will be the base learning rates.
+
+                             If `warmup_steps = 0`, the behavior of the scheduler will be the same as CosineAnnealingLR.
                              Default is 5.
-        last_epoch (int): The index of last epoch. Default is -1, which indicates the start of training.
+                             
+        last_epoch (int): The index of last scheduler step. 
+                          Note that this is a counter for the number of scheduler steps, not for the number of epochs.
+                          The name is just used to match PyTorch conventions and documentation 
+                          (which are a bit misleading themselves).
+                          Default is -1, which indicates the start of training.
     '''
     def __init__(self, 
                  optimizer: Optimizer, 
                  pre_warmup_lrs: Union[float, List[float]],
                  T_max: int,
-                 warmup_epochs: int = 5,
+                 warmup_steps: int = 5,
                  eta_min: float = 0.0,
                  last_epoch: int = -1):
         
-        assert T_max > warmup_epochs, (
-            f'Maximum number of epochs `T_max` ({T_max}) must be greater than `warmup_epochs` ({warmup_epochs})'
+        assert T_max > warmup_steps, (
+            f'Maximum number of scheduler steps `T_max` ({T_max}) must be greater than `warmup_steps` ({warmup_steps})'
         )
         
         if isinstance(pre_warmup_lrs, list):
@@ -119,7 +129,7 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
             pre_warmup_lrs = [pre_warmup_lrs] * len(optimizer.param_groups)
         
         self.pre_warmup_lrs = pre_warmup_lrs
-        self.warmup_epochs = warmup_epochs
+        self.warmup_steps = warmup_steps
         
         super().__init__(optimizer = optimizer, T_max = T_max, 
                          eta_min = eta_min, last_epoch = last_epoch) # Initializes self.base_lrs
@@ -129,12 +139,20 @@ class WarmupCosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
         Returns the learning rate of each parameter group in `optimizer`.
         '''
 
-        if (self.last_epoch <= self.warmup_epochs) and (self.warmup_epochs > 0):            
+        if (self.last_epoch <= self.warmup_steps) and (self.warmup_steps > 0):            
             # Warmup phase (Linearly changes pre_warmup_lrs to base_lrs)
-                # Each warmup step is (b_lr - w_lr) / warmup_epochs
+                # Each warmup change is (b_lr - w_lr) / warmup_steps
             return [
-                w_lr +  self.last_epoch * (b_lr - w_lr) / self.warmup_epochs
+                w_lr +  self.last_epoch * (b_lr - w_lr) / self.warmup_steps
                 for w_lr, b_lr in zip(self.pre_warmup_lrs, self.base_lrs)
             ]
-        else:
+        
+        elif self.last_epoch <= self.T_max:
             return super().get_lr()
+        
+        else:
+            # After T_max, the learning rate remains constant at eta_min
+            return [
+                self.eta_min
+                for _ in self.optimizer.param_groups
+            ]

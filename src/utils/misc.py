@@ -73,7 +73,7 @@ def save_checkpoint(base_model: nn.Module,
                     base_train_losses: Dict[str, list],
                     val_losses: Dict[str, Dict[str, list]],
                     eval_histories: EvalHistories,
-                    last_epoch: int,
+                    checkpoint_epoch: int,
                     scheduler: Optional[lr_scheduler._LRScheduler] = None, 
                     ema: Optional[EMA] = None,
                     save_dir: Optional[str] = None, 
@@ -93,7 +93,8 @@ def save_checkpoint(base_model: nn.Module,
         eval_histories (EvalHistories): Dictionary mapping model keys 
                                         (e.g. 'base' for `base_model` and 'ema' for `ema`)
                                         to a dictionary tracking evaluation metrics.
-        last_epoch (int): Index of the last completed epoch.
+        checkpoint_epoch (int): Index of the completed epoch this checkpoint refers to.
+                                Note: this may differ from the scheduler's internal step counter called `last_epoch`.
         scheduler (optional, lr_scheduler._LRScheduler): Learning rate scheduler.
         ema (optional, EMA): An instance of the EMA class used to maintain an EMA of `base_model` parameters.
         save_dir (Optional[str]): Directory to save the checkpoint.
@@ -124,7 +125,7 @@ def save_checkpoint(base_model: nn.Module,
         'base_train_losses': base_train_losses,
         'val_losses': val_losses,
         'eval_histories': eval_histories,
-        'last_epoch': last_epoch
+        'checkpoint_epoch': checkpoint_epoch
     }
 
     torch.save(obj = checkpoint, f = save_path)
@@ -152,7 +153,8 @@ def load_checkpoint(
         device (torch.Device or str): The device to load the checkpoint tensors on to. Default is 'cpu'.
 
     Returns:
-        last_epoch (int): Index of the last completed epoch.
+        checkpoint_epoch (int): Index of the completed epoch the checkpoint was saved at.
+                                Note: this may differ from the scheduler's internal step counter called `last_epoch`.
         base_train_losses (TrainLosses): Dictionary of lists storing train loss values per epoch for `base_model`.
         val_losses (ValLosses): Dictionary mapping model keys 
                                 (e.g. 'base' for `base_model` and 'ema' for `ema`)
@@ -165,7 +167,7 @@ def load_checkpoint(
     base_model.load_state_dict(checkpoint['base_model'])
     optimizer.load_state_dict(checkpoint['optimizer'])
 
-    last_epoch = checkpoint['last_epoch']
+    checkpoint_epoch = checkpoint['checkpoint_epoch']
     base_train_losses = checkpoint['base_train_losses']
     val_losses = checkpoint['val_losses']
     eval_histories = checkpoint['eval_histories']
@@ -187,4 +189,4 @@ def load_checkpoint(
                 f'{BOLD_START}[NOTE]{BOLD_END} '
                 'EMA provided, but no EMA state dict found in checkpoint. Continuing without loading a saved state dict...'
             )
-    return last_epoch, base_train_losses, val_losses, eval_histories
+    return checkpoint_epoch, base_train_losses, val_losses, eval_histories

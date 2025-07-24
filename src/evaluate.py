@@ -237,6 +237,8 @@ def calc_dataset_map(model: nn.Module,
     kwargs['iou_thresholds'] = [0.5] if map_thresholds is None else map_thresholds
 
     map_metric = MeanAveragePrecision(**kwargs)
+    map_metric.warn_on_many_detections = False
+    
     model.eval()
     for imgs, scale_targs in dataloader:
         scale_targs = [targs.to(device) for targs in scale_targs]
