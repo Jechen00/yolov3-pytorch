@@ -227,8 +227,8 @@ This allows for configuring _most_ settings, such as:
 - [Loss Function](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/loss.py#L16)
 - [Optimizer (SGD)](https://pytorch.org/docs/stable/generated/torch.optim.SGD.html)
 - [Learning Rate Scheduler (Cosine Annealing)](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/schedulers.py#L77)
-- [Training/Evaluation Settings](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/engine.py#L547)
-- [Checkpoint Settings](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/engine.py#L614)
+- [Training/Evaluation Settings](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/engine.py#L589)
+- [Checkpoint Settings](https://github.com/Jechen00/yolov3-pytorch/blob/main/src/engine.py#L656)
 
 By default, the configuration assumes a standard setup that includes a DarkNet-53 backbone, an SGD optimizer, and a cosine annealing learning rate scheduler. If you wish to customize any of these components, you'll need to modify the `run_training.py` script accordingly.
 
