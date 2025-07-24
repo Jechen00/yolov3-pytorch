@@ -289,7 +289,6 @@ def train(
     te_cfgs: TrainEvalConfigs,
     ckpt_cfgs: CheckpointConfigs,
     scheduler: Optional[lr_scheduler._LRScheduler] = None,
-    scheduler_freq: Literal['epoch', 'optim_step'] = 'epoch',
     ema: Optional[EMA] = None,
     device: Union[torch.device, str] = 'cpu'
 ) -> Tuple[TrainLosses, ValLosses, EvalHistories]:
@@ -318,17 +317,6 @@ def train(
                                                          If provided and resuming from a checkpoint (`ckpt_cfgs.resume = True`),
                                                          the checkpoint file at `ckpt_cfgs.resume_path` must also include a scheduler. 
                                                          Default is None, which disables scheduling entirely — even when resuming.
-        scheduler_freq (Literal['epoch', 'optim_step']): Defines how frequently `scheduler.step()` is called during training.
-                    - epoch: `scheduler.step()` is called at the end of each training loop (once per epoch).
-                    - optim_step: `scheduler.step()` is called after each optimizer step.
-
-                    Please make sure that the arguments of the scheduler (e.g. T_max for CosineAnnealing) account for this.
-                    For example:
-                        - If `scheduler_freq = 'epoch'`, you may set `T_max` to the total number of epochs.
-                        - If `scheduler_freq = 'optim_step'`, you may set `T_max` to the total number of optimizer steps,
-                          accounting for gradient accumulation if applicable.
-
-                    Default is `epoch`.
         ema (optional, EMA): An instance of the EMA class used to maintain an EMA of `base_model` parameters.
                              The model at `ema.ema_model` should already be on `device`.
         device (str or torch.device): The device to perform computations on. Default is 'cpu'.
@@ -432,7 +420,7 @@ def train(
         dataloader = train_loader,
         loss_fn = loss_fn, 
         optimizer = optimizer,
-        scheduler = None if scheduler_freq == 'epoch' else scheduler,
+        scheduler = None if te_cfgs.scheduler_freq == 'epoch' else scheduler,
         ema = ema,
         accum_steps = te_cfgs.accum_steps, 
         ema_update_interval = te_cfgs.ema_update_interval,
@@ -482,7 +470,7 @@ def train(
         train_avgs = yolov3_train_step(**train_kwargs)
         
         # Step scheduler if learning rates should only be updated at the end of each training loop
-        if (scheduler is not None) and (scheduler_freq == 'epoch'):
+        if (scheduler is not None) and (te_cfgs.scheduler_freq == 'epoch'):
             scheduler.step() 
 
         # Store and log each average loss
@@ -602,6 +590,17 @@ class TrainEvalConfigs():
                            If `accum_steps > 1`, gradients are accumulated over multiple batches,
                            simulating a larger batch size. Default is 1.
                            See: https://lightning.ai/blog/gradient-accumulation/
+        scheduler_freq (Literal['epoch', 'optim_step']): Defines how frequently `scheduler.step()` is called during training.
+                    - epoch: `scheduler.step()` is called at the end of each training loop (once per epoch).
+                    - optim_step: `scheduler.step()` is called after each optimizer step.
+
+                    Please make sure that the arguments of the scheduler (e.g. T_max for CosineAnnealing) account for this.
+                    For example:
+                        - If `scheduler_freq = 'epoch'`, you may set `T_max` to the total number of epochs.
+                        - If `scheduler_freq = 'optim_step'`, you may set `T_max` to the total number of optimizer steps,
+                          accounting for gradient accumulation if applicable.
+
+                    This is only used if a learning rate scheduler is provided during training. Default is `epoch`.
         ema_update_interval (int): Interval (in optimizer steps) to update EMA model weights. 
                                    This is only used if an EMA class instance is provided during training. Default is 1.
         eval_interval (optional, int): Interval (in epochs) to compute evaluation metrics on the validation dataset
@@ -631,7 +630,9 @@ class TrainEvalConfigs():
     num_epochs: int
     accum_steps: int = 1
     
+    scheduler_freq: Literal['epoch', 'optim_step'] = 'epoch',
     ema_update_interval: int = 1
+
     eval_interval: Optional[int] = None
     eval_start_epoch: int = 0
     multi_aug_decay_range: Optional[Tuple[int, int]] = None

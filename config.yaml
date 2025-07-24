@@ -69,11 +69,9 @@ scheduler:
     pre_warmup_lrs: 1.0e-4
     eta_min: 1.0e-6
   
-  timing_args:                    # Timing-related scheduler args (interpreted as epochs, but scaled if freq = optim_step)
+  timing_args:                    # Timing-related scheduler args (units are epochs, but scaled if scheduler_freq = optim_step)
     T_max: 180
     warmup_steps: 5
-
-  freq: optim_step                # Scheduler step frequency: 'epoch' or 'optim_step'
 
 
 # Training/Evaluation Configs
@@ -81,6 +79,7 @@ train_eval:
   # scale_anchors and strides inherited from model
   num_epochs: 180
   accum_steps: 1                  # No gradient accumulation
+  scheduler_freq: optim_step      # Scheduler step frequency: 'epoch' or 'optim_step'
   ema_update_interval: 1
 
   eval_interval: 5                # Setting to null means no evaluations
