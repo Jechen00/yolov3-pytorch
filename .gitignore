@@ -4,3 +4,5 @@ __pycache__/
 data/coco/annotations/
 data/coco/images/
 data/voc/VOCdevkit/
+saved_models/
+pretrained_weights/
