@@ -62,7 +62,7 @@ pip install torch==2.7.0
 pip install torchvision==0.22.0
 pip install torchmetrics==1.7.2
 ```
-### 5) (Optional) Download Saved Model
+### 5) (Optional) Download Saved Models
 If you want to use a pretrained YOLOv3 model that was trained on the Pascal VOC dataset, you can download it from this [Google Drive folder](https://drive.google.com/drive/folders/1m2RO3Y1EV4YcEBcbotueOA2SEFbWUPSJ?usp=drive_link). This will include the base model weights, EMA model weights, and the training results (a `.pkl` file).
 
 The setup is similar to step 3:
