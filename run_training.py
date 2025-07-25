@@ -54,13 +54,13 @@ if __name__ == '__main__':
     ema_cfgs = configs['ema']
 
     # Using DarkNet53 backbone, as per YOLOv3 paper
-    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfgs['backbone_cfgs'])
+    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfgs['backbone_cfg'])
     if base_model_cfgs['backbone_weights'] is not None:
         darknet53_backbone.load_weights_file(weights_file = base_model_cfgs['backbone_weights'], 
                                             input_shape = tuple(base_model_cfgs['input_shape']))
 
     base_model = builder.YOLOv3(backbone = darknet53_backbone, 
-                                detector_cfgs = base_model_cfgs['detector_cfgs'])
+                                neck_heads_cfg = base_model_cfgs['neck_heads_cfg'])
 
     if ema_cfgs['use_ema']:
         ema = ema_model.EMA(base_model = base_model, 

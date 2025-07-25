@@ -169,13 +169,14 @@ class DarkNet53Backbone(nn.Module, yolo_loader.WeightLoadable):
             
         return Y, layer_outputs
     
-class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
+class YOLOv3NeckHeads(nn.Module, yolo_loader.WeightLoadable):
     '''
-    YOLOv3 detector (neck and heads), with its prediction layers constructed from a configuration file
+    The YOLOv3 neck (feature pyramid network layers) and head (detection layers), 
+    collectively referred to as the neck+heads. This is constructed from a configuration file 
     that follows the structure at: https://github.com/pjreddie/darknet/blob/master/cfg/yolov3-voc.cfg
 
     Args:
-        cfg_file (str): Path to the `.cfg` file that defines the structure of the YOLOv3 detection head.
+        cfg_file (str): Path to the `.cfg` file that defines the structure of the YOLOv3 neck+heads.
     '''
     def __init__(self, cfg_file: str):
         super().__init__()
@@ -198,11 +199,11 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
         layer_outputs: List[torch.Tensor]
     ) -> List[torch.Tensor]:
         '''
-        Forward function of the detector.
+        Forward function of the neck+heads.
 
         This function processes intermediate outputs from a backbone (e.g., DarkNet-53 feature extractor)
         and produces detection predictions at multiple scales.
-        For each YOLO layer in the detector, the output of the previous layer is reshaped to
+        For each YOLO layer in the head component, the output of the previous layer is reshaped to
         the expected YOLOv3 format: (batch_size, num_anchors, height, width, 5 + C),
         where the last dimension represents (tx, ty, tw, th, to, class_scores).
 
@@ -253,21 +254,26 @@ class YOLOv3Detector(nn.Module, yolo_loader.WeightLoadable):
 class YOLOv3(nn.Module):
     def __init__(self, 
                  backbone: nn.Module, 
-                 detector_cfgs: str):
+                 neck_heads_cfg: str):
         '''
-        YOLOv3 built from a customizable backbone (nn.Module) and a detector configuration file.
+        The complete YOLOv3 model, including the backbone, neck, and heads.
+        The model components are grouped as follows:
+            - backbone: a feature extractor (any nn.Module)
+            - neck_heads: the feature pyramid network (FPN) and detection layers, 
+                          built from a configuration file
 
-        backbone (nn.Module): The backbone/feature extractor, with weights ideally pretrained on ImageNet.
-                              The output should be 2D spatial feature maps of shape (batch_size, channels, height, width).
-        detector_cfgs (str): Full path to a `.cfg` file for the YOLOv3 detector configs. 
-                             It should follow the structure from: 
-                                https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
+        Args:
+            backbone (nn.Module): The backbone/feature extractor, with weights ideally pretrained on ImageNet.
+                                  The output should be 2D spatial feature maps of shape (batch_size, channels, height, width).
+            neck_heads_cfg (str): Full path to a `.cfg` file for the YOLOv3 neck and heads configurations. 
+                                 It should follow the structure from: 
+                                    https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
         '''
         super().__init__()
         self.backbone = backbone        
-        self.detector_cfgs = detector_cfgs
-        self.detector = YOLOv3Detector(cfg_file = detector_cfgs)
-        self.scale_cfgs = self.detector.scale_cfgs
+        self.neck_heads_cfg = neck_heads_cfg
+        self.neck_heads = YOLOv3NeckHeads(cfg_file = neck_heads_cfg)
+        self.scale_cfgs = self.neck_heads.scale_cfgs
 
     def infer_scale_info(
             self, 
@@ -316,9 +322,9 @@ class YOLOv3(nn.Module):
 
         return scale_anchors, strides, fmap_sizes
     
-    def init_detector_weights(self, input_shape: tuple):
+    def init_neck_heads(self, input_shape: tuple):
         '''
-        Randomly initalizes the detector layers as follows:
+        Randomly initalizes the neck and heads layers as follows:
             - Convolutional layers:
                 - Weights are initialized from a normal distribution, N(mu = 0, sigma = 0.01)
                 - Biases are set to 0.0
@@ -336,7 +342,7 @@ class YOLOv3(nn.Module):
         if orig_training:
             self.train()
 
-        for module in self.detector.modules():
+        for module in self.neck_heads.modules():
             if isinstance(module, nn.Conv2d):
                 nn.init.normal_(module.weight, mean = 0.0, std = 0.01)
                 if module.bias is not None:
@@ -359,12 +365,12 @@ class YOLOv3(nn.Module):
                                                 (batch_size, num_anchors, height, width, 5 + C).
         '''
         _, layer_outputs = self.backbone(X)
-        scale_outputs = self.detector(layer_outputs)
+        scale_outputs = self.neck_heads(layer_outputs)
         return scale_outputs
     
 class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
     '''
-    YOLOv3 model built entirely from a single configuration file, without separate backbone/detector objects. 
+    YOLOv3 model built entirely from a single configuration file, without separate objects for the backbone and neck+heads.
     This follows the original `.cfg` structure from https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
 
     Args:
