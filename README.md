@@ -37,7 +37,16 @@ This environment should use **Python >= 3.10**.
 ```
 git clone git@github.com:Jechen00/yolov3-pytorch.git
 ```
-### 3) Install Required Packages
+### 3) Download Pretrained Weights
+When training a YOLOv3 model, it is recommended to use pretrained weights for the DarkNet-53 backbone.
+These weights are originally available at [pjreddie.com](https://pjreddie.com/), but you can also download them from this [Google Drive folder](https://drive.google.com/drive/folders/11VTHYuuqGtnuMxAmqHpHeNVJOhOs_VWS).
+
+To set up:
+  1. Click the Google Drive link and download the entire `pretrained_weights` folder by selecting "**Download all**".
+  2. If the folder downloads as a zip file, unzip it.
+  3. Move the `pretrained_weights` directory into the `yolov3-pytorch` directory.
+
+### 4) Install Required Packages
 Navigate to the `yolov3-pytorch` directory and run:
 ```
 pip install -r requirements.txt
@@ -53,6 +62,13 @@ pip install torch==2.7.0
 pip install torchvision==0.22.0
 pip install torchmetrics==1.7.2
 ```
+### 5) (Optional) Download Saved Model
+If you want to use a pretrained YOLOv3 model that was trained on the Pascal VOC dataset, you can download it from this [Google Drive folder](https://drive.google.com/drive/folders/1m2RO3Y1EV4YcEBcbotueOA2SEFbWUPSJ?usp=drive_link). This will include the base model weights, EMA model weights, and the training results (a `.pkl` file).
+
+The setup is similar to step 3:
+  1.  Click the Google Drive link and download the entire `saved_models` folder by selecting "**Download all**".
+  2.  If the folder downloads as a zip file, unzip it.
+  3.  Move the `saved_models` directory into the `yolov3-pytorch` directory.
 
 
 <br></br>

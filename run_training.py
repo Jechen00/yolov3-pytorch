@@ -57,7 +57,7 @@ if __name__ == '__main__':
     darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfgs['backbone_cfg'])
     if base_model_cfgs['backbone_weights'] is not None:
         darknet53_backbone.load_weights_file(weights_file = base_model_cfgs['backbone_weights'], 
-                                            input_shape = tuple(base_model_cfgs['input_shape']))
+                                             input_shape = tuple(base_model_cfgs['input_shape']))
 
     base_model = builder.YOLOv3(backbone = darknet53_backbone, 
                                 neck_heads_cfg = base_model_cfgs['neck_heads_cfg'])
