@@ -39,7 +39,7 @@ git clone git@github.com:Jechen00/yolov3-pytorch.git
 ```
 ### 3) Download Pretrained Weights
 When training a YOLOv3 model, it is recommended to use pretrained weights for the DarkNet-53 backbone.
-These weights are originally available at [pjreddie.com](https://pjreddie.com/), but you can also download them from this [Google Drive folder](https://drive.google.com/drive/folders/11VTHYuuqGtnuMxAmqHpHeNVJOhOs_VWS).
+These weights are originally available at [pjreddie.com](https://pjreddie.com/), but you can also download them from this [Google Drive folder](https://drive.google.com/drive/folders/11VTHYuuqGtnuMxAmqHpHeNVJOhOs_VWS). The folder includes both the original, full-model weights and the backbone-only versions.
 
 To set up:
   1. Click the Google Drive link and download the entire `pretrained_weights` folder by selecting "**Download all**".
