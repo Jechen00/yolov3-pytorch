@@ -7,7 +7,7 @@ device: null                      # If null, run_training.py will use constants.
 # Base model Configs
 base_model:
   backbone_cfg: ./model_configs/darknet53_backbone.cfg               # Using DarkNet53 backbone
-  backbone_weights: ./pretrained_weights/yolov3_416_coco.weights      # Using weights pretrained on MS-COCO
+  backbone_weights: ./pretrained_weights/yolov3_backbone_416_coco.weights      # Using weights pretrained on MS-COCO
   neck_heads_cfg: ./model_configs/yolov3_neck_heads_voc.cfg
   input_shape: [1, 3, 416, 416]
 
