@@ -41,8 +41,8 @@ def parse_cfgs(cfg_file: str) -> List[Dict[str, str]]:
                                                  'filters: '75',
                                                  'activation': 'linear'}
     '''
-    file = open(cfg_file, 'r')
-    raw_cfgs = re.split(r'(?=\[.*\])', file.read().strip()) # Split config file by [section]
+    with open(cfg_file, 'r') as f:
+        raw_cfgs = re.split(r'(?=^\[.*\])', f.read().strip(), flags = re.MULTILINE) # Split config file by [section]
 
     section_cfgs = []
     for sec_txt in raw_cfgs:
