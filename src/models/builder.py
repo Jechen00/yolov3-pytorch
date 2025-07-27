@@ -54,23 +54,23 @@ def make_module(cfg_dict: Dict[str, str]) -> Tuple[nn.Module, Optional[dict]]:
         else:
             include_bn = False
 
-        out_channels = int(cfg_dict['filters'])
         kernel_size = int(cfg_dict['size'])
-        stride = int(cfg_dict['stride'])
-        padding = kernel_size // 2 if int(cfg_dict['pad']) == 1 else 0 # 'Same' padding if pad == 1
+        padding = (kernel_size - 1) // 2 if int(cfg_dict['pad']) == 1 else 0
 
         act_type = cfg_dict['activation']
         if act_type == 'leaky':
             activation = nn.LeakyReLU(negative_slope = 0.1, inplace = True)
+        elif act_type == 'mish':
+            activation = nn.Mish(inplace = True)
         elif act_type == 'linear':
             activation = None
         else:
             raise ValueError(f'Unsupported activation type: {act_type}')
 
         module = blocks.ConvBNAct(
-            out_channels = out_channels,
+            out_channels = int(cfg_dict['filters']),
             kernel_size = kernel_size,
-            stride = stride,
+            stride = int(cfg_dict['stride']),
             padding = padding, 
             include_bn = include_bn,
             activation = activation
@@ -80,6 +80,15 @@ def make_module(cfg_dict: Dict[str, str]) -> Tuple[nn.Module, Optional[dict]]:
     elif module_name == 'upsample':
         module = nn.Upsample(scale_factor = int(cfg_dict['stride']), mode = 'nearest')
     
+    # Maxpool layer
+    elif module_name == 'maxpool':
+        kernel_size = int(cfg_dict['size'])
+        module = nn.MaxPool2d(
+            kernel_size = kernel_size,
+            stride = int(cfg_dict['stride']),
+            padding = (kernel_size - 1) // 2 # Padding same with stride is 1
+        )
+
     # Route Layer
     elif module_name == 'route':
         route_layers = [int(i) for i in cfg_dict['layers'].split(',')]
@@ -97,14 +106,9 @@ def make_module(cfg_dict: Dict[str, str]) -> Tuple[nn.Module, Optional[dict]]:
         anchors = np.array(anchors).reshape(-1, 2)
 
         # Get information for this scale
-        scale_info = {
-            'anchors': [tuple(anchor) for anchor in anchors[mask].tolist()],
-            'num_classes': int(cfg_dict['classes']),
-            'ignore_thresh': float(cfg_dict['ignore_thresh']),
-            'truth_thresh': float(cfg_dict['truth_thresh']),
-            'jitter': float(cfg_dict['jitter']),
-            'random': int(cfg_dict['random'])
-        }
+        scale_info = cfg_dict
+        scale_info['anchors'] = [tuple(anchor) for anchor in anchors[mask].tolist()]
+        scale_info['num_classes'] = int(cfg_dict['classes'])
 
         module = nn.Identity() # Used as a placeholder to maintain layer indices
 
@@ -159,10 +163,10 @@ class DarkNet53Backbone(nn.Module, yolo_loader.WeightLoadable):
         for cfg_dict, module in zip(self.model_cfgs, self.module_list):
             module_name = cfg_dict['name']
             
-            if module_name == 'convolutional':
+            if module_name in ['convolutional', 'upsample']:
                 Y = module(Y)
                 
-            elif module_name == 'shortcut':
+            elif module_name in ['route', 'shortcut']:
                 Y = module(layer_outputs)
                 
             layer_outputs.append(Y)

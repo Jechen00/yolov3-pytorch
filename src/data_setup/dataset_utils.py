@@ -565,6 +565,7 @@ class DetectionDatasetBase(ABC, Dataset):
 
     def regenerate_scale_anchors(self, 
                                  anchors_per_scale: Tuple[int] = (3, 3, 3), 
+                                 scale_order: Literal['desc', 'asc'] = 'desc',
                                  max_iters: int = 1000,
                                  update_method: Literal['mean', 'median'] = 'mean',
                                  input_size: Optional[Tuple[int, int]] = None):
@@ -577,15 +578,20 @@ class DetectionDatasetBase(ABC, Dataset):
 
         Args:
             anchors_per_scale (Tuple[int]): Number of anchors to assign to each detection scale.
-                                            The order of the scales are assumed to be from largest to smallest.
                                             The total number of anchors (k) is the sum of this tuple.
                                             Default is (3, 3, 3) for three scales with three anchors each (YOLOv3 default).
+            scale_order (Literal['desc', 'asc']): The size order for the model scales. 
+                                                  - desc: Size order is descending, e.g. largest to smallest
+                                                  - asc: Size order is ascending, e.g. smallest to largest
+                                                  Default is 'desc' (YOLOv3 default).
             max_iters (int): Maximum number of iterations to run k-means clustering. Default is 1000.
             update_method (Literal['mean', 'median']): Method to update the cluster centroids.
                                                         - mean: Use the mean of the grouped bboxes.
                                                         - median: Use the median of the grouped bboxes.
+                                                        Default is 'mean'.
             input_size (Optional[Tuple[int, int]]): Input size in (height, width) format.
                                                     If not provided, defaults to `self.default_input_size`.
+                                                    Default is None.
         '''
         input_size = self.default_input_size if input_size is None else input_size
         num_anchors = sum(anchors_per_scale)
@@ -610,16 +616,14 @@ class DetectionDatasetBase(ABC, Dataset):
             self.bbox_whs = torch.concat(bbox_whs, dim = 0)
 
         # Perform k-means clustering on the bbox_whs set
-        # Note: the returned anchors are ordered in ascending order of area
         all_anchors = wh_k_means(bbox_whs = self.bbox_whs,
                                  k = num_anchors,
                                  max_iter = max_iters,
                                  update_method = update_method,
                                  round_whs = True,
-                                 area_order = 'desc',
+                                 area_order = scale_order,
                                  input_size = input_size)
         
-        # Scale order: large -> small
         self.scale_anchors = list(torch.split(all_anchors, anchors_per_scale, dim = 0))
         self.anchors_info = self._get_anchors_info() # Update anchor information
 

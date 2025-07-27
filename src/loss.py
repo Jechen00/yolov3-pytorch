@@ -43,7 +43,7 @@ class YOLOv3Loss(nn.Module):
                                                                    Default is None.
         scale_weights (optional, List[float]): List of weights to apply to the loss at each scale of the model.
                                                The length of this list must match the number of scales in the model (e.g., [large, medium, small]). 
-                                               Each scale’s loss is multiplied by its corresponding weight:  
+                                               Each scale's loss is multiplied by its corresponding weight:  
                                                     `total_loss = large_weight * large_loss + medium_weight * medium_loss + small_weight * small_loss`.
                                                If not provided, all scales are weighted equally. Default is None.
         scale_anchors (optional, List[torch.tensor]): List of anchor tensors for each scale of the model.
@@ -87,13 +87,9 @@ class YOLOv3Loss(nn.Module):
         self.use_iou_coord = use_iou_coord
         self.softmax_probs = softmax_probs
         self.iou_coord_reg = iou_coord_reg
+        self.scale_weights = scale_weights
         self.scale_anchors = scale_anchors
         self.strides = strides
-
-        if scale_weights is not None:
-            self.scale_weights = scale_weights
-        else:
-            self.scale_weights = [1, 1, 1]
 
     def forward(self,
                 scale_logits: List[torch.Tensor],
@@ -120,6 +116,11 @@ class YOLOv3Loss(nn.Module):
         '''
         loss_dict = {key: 0.0 for key in self.loss_keys}
         num_classes = scale_targs[0].shape[-1] - 5
+
+        if self.scale_weights is None:
+            scale_weights = [1] * len(scale_targs) # All scales are treated equally
+        else:
+            scale_weights = self.scale_weights
 
         # Loop over scales and sum their total losses
         for i, (targs, logits) in enumerate(zip(scale_targs, scale_logits)):
@@ -237,8 +238,8 @@ class YOLOv3Loss(nn.Module):
             # Add each component loss to loss_dict
             for key, value in loss_comps.items():
                 loss_dict[key] += value
-
-            loss_dict['total'] += self.scale_weights[i] * sum(
+            
+            loss_dict['total'] += scale_weights[i] * sum(
                 self.lambdas[key] * loss_comps[key] 
                 for key in loss_comps.keys()
             )
