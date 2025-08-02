@@ -41,6 +41,16 @@ class YOLOv3Loss(nn.Module):
                                                                    If not provided, regular IoU loss is used.
                                                                    When provided, the respective GIoU, DIoU, or CIoU regularizations are used.
                                                                    Default is None.
+        ignore_threshold (optional, float): IoU threshold for the ignore mask used for the objectness loss.
+                                            If a bounding box prediction in a no-object cell (target objectess = 0) 
+                                            has an IoU greater than or equal to `ignore_threshold`
+                                            with any target (ground truth) bounding box in an object cell (target objectness > 0),
+                                            that no-object cell will be excluded from the objectness loss computation.
+                                            **Note:** This differs from the ignore threshold used in YOLOv3 target encoding/assignment, 
+                                            where a grid cell is marked as "ignore" (target objectness = -1) based on the IoU between 
+                                            the target bounding box and anchor boxes (priors) with the same center coordinate (grid_y, grid_x).
+                                            If `ignore_threshold` is None, no ignore mask is applied during loss computations.
+                                            Default is None.
         scale_weights (optional, List[float]): List of weights to apply to the loss at each scale of the model.
                                                The length of this list must match the number of scales in the model (e.g., [large, medium, small]). 
                                                Each scale's loss is multiplied by its corresponding weight:  
@@ -64,6 +74,7 @@ class YOLOv3Loss(nn.Module):
                  gamma: float = 2.0,
                  class_smoothing: float = 0.0,
                  iou_coord_reg: Optional[Literal['giou', 'diou', 'ciou']] = None,
+                 ignore_threshold: Optional[float] = None,
                  scale_weights: Optional[List[float]] = None,
                  scale_anchors: Optional[List[torch.Tensor]] = None,
                  strides: Optional[List[Tuple[int, int]]] = None):
@@ -87,10 +98,109 @@ class YOLOv3Loss(nn.Module):
         self.use_iou_coord = use_iou_coord
         self.softmax_probs = softmax_probs
         self.iou_coord_reg = iou_coord_reg
+        self.ignore_threshold = ignore_threshold
         self.scale_weights = scale_weights
         self.scale_anchors = scale_anchors
         self.strides = strides
 
+    def create_ignore_mask(
+        self,
+        logits: torch.Tensor, 
+        targs: torch.Tensor, 
+        anchors: torch.Tensor,
+        stride: Tuple[int, int],
+        return_targs_bboxes: bool = False
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        '''
+        Creates an ignore mask for objectness loss computation.
+
+        If a bounding box prediction in a no-object cell (target objectess = 0) 
+        has an IoU greater than or equal to `self.ignore_threshold`
+        with any target (ground truth) bounding box in an object cell (target objectness > 0),
+        the no-object cell will be marked as `True` in the ignore mask. 
+
+        Ignored cells are excluded from the objectness loss computation to prevent 
+        penalizing reasonable predictions.
+
+        **Note:** This differs from the ignore process in YOLOv3 target encoding/assignment, 
+        where a grid cell is marked as "ignore" (target objectness = -1) based on the IoU between 
+        the target bounding box and anchor boxes (priors) with the same center coordinate (grid_y, grid_x).
+
+        Args:
+            logits (torch.Tensor): Logits from a single detection scales of a YOLOv3 model output.
+                                   Shape is (batch_size, num_anchors, fmap_h, fmap_w, 5 + C),
+                                   where the last dimension represents (tx, ty, tw, th, to, class scores).
+            targs: (torch.Tensor): YOLOv3-encoded targets (ground truths) assigned to the same scale as `logits`.
+                                   Shape is the same as `logits` and the format should be the same
+                                   as the model outputs **after activation**,
+                                   i.e., after applying sigmoid to box coordinates (tx, ty) and object confidence (to),
+                                   and sigmoid or softmax to class scores.
+            anchors (torch.Tensor): Anchor tensors for the same scale as `logits`.
+                                    Shape is (num_anchors, 2), where the last dimension gives 
+                                    the (width, height) of the anchor in units of the input size (pixels). 
+            stride(Tuple[int, int]): The stride (height, width) for the same scale as `logits`.
+            return_targs_bboxes (bool): Whether to return the decoded target (ground truth) bounding boxes from object cells.
+                                        Default is False.
+
+        Returns:
+            ignore_mask (torch.Tensor): Boolean mask indicating which cells, 
+                                        i.e. coordinates represented by (anchor index, grid_y, grid_x),
+                                        should be ignored during objectness loss computation.
+                                        Shape is (batch_size, num_anchors, grid_y, grid_x)
+            obj_targs_bboxes (optional, torch.Tensor): Decoded target (ground truth) bounding boxes.
+                                                       Shape is (num_objects, 4), where the last dimension 
+                                                       is in XYXY format and are in units of the input image (pixels).
+                                                       Only returned if `return_targs_bboxes=True`; otherwise, returns None.
+
+        '''
+        # Shape of noobj_idxs: (num_noobj, 4) where 4 = (batch_idx, anchor_idx, grid_y, grid_x)
+        noobj_mask = (targs[..., 4] == 0)
+        noobj_idxs = noobj_mask.nonzero(as_tuple = False)
+        ignore_mask = torch.zeros_like(noobj_mask)
+
+        # Shape of obj_idxs: (num_obj, 4) where 4 = (batch_idx, anchor_idx, grid_y, grid_x)
+        obj_mask = (targs[..., 4] > 0)
+        obj_idxs = obj_mask.nonzero(as_tuple = False)
+
+        logits_bboxes = logits[..., :4].clone()
+        logits_bboxes[..., :2] = torch.sigmoid(logits_bboxes[..., :2]) # Apply sigmoid to t_x, t_y (center offsets)
+
+        noobj_preds_bboxes = postprocess.decode_yolov3_bboxes(
+            bboxes = logits_bboxes,
+            anchors = anchors,
+            stride = stride,
+            mask = noobj_mask,
+            return_format = 'xyxy',
+            return_units = 'pixel'
+        )
+
+        obj_targs_bboxes = postprocess.decode_yolov3_bboxes(
+            bboxes = targs[..., :4],
+            anchors = anchors,
+            stride = stride,
+            mask = obj_mask,
+            return_format = 'xyxy',
+            return_units = 'pixel'
+        )
+
+        for b in range(targs.shape[0]):
+            noobj_b_mask = (noobj_idxs[:, 0] == b)
+            obj_b_mask = (obj_idxs[:, 0] == b)
+
+            if torch.any(obj_b_mask):
+                ious = evaluate.calc_ious(bboxes1 = noobj_preds_bboxes[noobj_b_mask],
+                                          bboxes2 = obj_targs_bboxes[obj_b_mask])
+                max_ious, _ = ious.max(dim = -1)
+
+                # Shape: (num_ignore, 3), where 3 = (anchor_idx, grid_y, grid_x)
+                ignore_idxs = noobj_idxs[noobj_b_mask][max_ious >= self.ignore_threshold][:, 1:]
+                ignore_mask[b, ignore_idxs[:, 0], ignore_idxs[:, 1], ignore_idxs[:, 2]] = 1
+                
+        if return_targs_bboxes:
+            return ignore_mask, obj_targs_bboxes
+        else:
+            return ignore_mask, None
+    
     def forward(self,
                 scale_logits: List[torch.Tensor],
                 scale_targs: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -101,7 +211,7 @@ class YOLOv3Loss(nn.Module):
             scale_logits (List[torch.Tensor]): List of logits from the YOLOv3 model, one per detection scale.
                                                Each element is a tensor of shape: (batch_size, num_anchors, fmap_h, fmap_w, 5 + C),
                                                where the last dimension represents (tx, ty, tw, th, to, class scores).
-            scale_targs: (List[torch.Tensor]): List of YOLOv3-encoded ground truth targets, one per detection scale.
+            scale_targs: (List[torch.Tensor]): List of YOLOv3-encoded targets (ground truths), one per detection scale.
                                                Each element is a tensor with the same shape as `scale_logits`.
                                                Each target should match the format of the model outputs **after activation**,
                                                i.e., after applying sigmoid to box coordinates and object confidence,
@@ -131,7 +241,22 @@ class YOLOv3Loss(nn.Module):
             loss_comps = {key: 0.0 for key in self.loss_keys[:-1]}
 
             obj_mask = (targs[..., 4] > 0)
-            valid_mask = torch.logical_not(targs[..., 4] == -1)
+            if self.ignore_threshold is None:
+                # Only ignore no-object cells based on anchor assignment from the dataset
+                valid_mask = (targs[..., 4] != -1)
+                targs_bboxes = None # Placeholder in case use_iou_coord = True
+
+            else:
+                # Ignore no-object cells if marked as ignored by dataset anchor assignment 
+                    # or if prediction overlaps too much with a GT bbox
+                ignore_mask, targs_bboxes = self.create_ignore_mask(
+                    logits = logits, 
+                    targs = targs,
+                    anchors = self.scale_anchors[i],
+                    stride = self.strides[i],
+                    return_targs_bboxes = self.use_iou_coord
+                )
+                valid_mask = torch.logical_and((targs[..., 4] != -1), torch.logical_not(ignore_mask))
 
             #------------------
             # Confidence Loss
@@ -208,16 +333,18 @@ class YOLOv3Loss(nn.Module):
                     ).sum(dim = -1)
 
                 else:
+                    if targs_bboxes is None:
+                        targs_bboxes = postprocess.decode_yolov3_bboxes(
+                            bboxes = targs[..., :4],
+                            anchors = self.scale_anchors[i],
+                            stride = self.strides[i],
+                            mask = obj_mask,
+                            return_format = 'xyxy',
+                            return_units = 'pixel'
+                        )
+
                     preds_bboxes = postprocess.decode_yolov3_bboxes(
                         bboxes = preds[..., :4], 
-                        anchors = self.scale_anchors[i],
-                        stride = self.strides[i],
-                        mask = obj_mask, 
-                        return_format = 'xyxy',
-                        return_units = 'pixel'
-                    )
-                    targs_bboxes = postprocess.decode_yolov3_bboxes(
-                        bboxes = targs[..., :4], 
                         anchors = self.scale_anchors[i],
                         stride = self.strides[i],
                         mask = obj_mask, 

@@ -27,12 +27,12 @@ dataloader:
 
   batch_size: 32
   num_workers: 10
-  ignore_threshold: 0.5
+  ignore_threshold: 0.5           # Ignores based on anchor and GT IoUs
   min_box_scale: 0.01
   
   multi_augs: [mosaic, mixup]
   multi_aug_prob: 0.9
-  mixup_alpha: 2.5
+  mixup_alpha: 3.0
   multiscale_interval: 10
   multiscale_sizes: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608]
 
@@ -41,19 +41,21 @@ dataloader:
 loss_fn:
   # scale_anchors and strides inherited from model
   lambda_coord: 1.5
-  lambda_class: 0.3
-  lambda_conf: 1.0
+  lambda_class: 0.4
+  lambda_conf: 0.8
   scale_weights: [0.8, 1, 1]      # Scale order: large, medium, small
 
   use_focal_conf: true            # Uses focal loss for object confidence
   alpha: 0.25
-  gamma: 1.5
+  gamma: 1.0
 
   softmax_probs: true             # Applies softmax (single-label) to class logits
   class_smoothing: 0.05           # Label smoothing used with softmax and cross-entropy
 
   use_iou_coord: true             # Uses IoU, GIoU, DIoU, or CIoU for coordinate loss
   iou_coord_reg: ciou
+
+  ignore_threshold: 0.75          # Ignores based on prediction and GT IoUs
 
 
 # SGD optimizer Configs
@@ -70,14 +72,14 @@ scheduler:
     eta_min: 1.0e-6
   
   timing_args:                    # Timing-related scheduler args (units are epochs, but scaled if scheduler_freq = optim_step)
-    T_max: 180
+    T_max: 150
     warmup_steps: 5
 
 
 # Training/Evaluation Configs
 train_eval:
   # scale_anchors and strides inherited from model
-  num_epochs: 180
+  num_epochs: 150
   accum_steps: 1                  # No gradient accumulation
   scheduler_freq: optim_step      # Scheduler step frequency: 'epoch' or 'optim_step'
   ema_update_interval: 1

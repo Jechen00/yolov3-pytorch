@@ -19,7 +19,7 @@ from typing import Tuple, List, Union, Callable, Optional, Literal, Dict, Any
 
 from src import evaluate
 from src.data_setup import transforms
-from src.utils import misc, convert
+from src.utils import misc
 from src.utils.constants import BOLD_START, BOLD_END
 
 
@@ -650,7 +650,6 @@ class DetectionDatasetBase(ABC, Dataset):
         
         anchors_info = {
             'anchors_wh': torch.concat(self.scale_anchors, dim = 0), # Shape: (num_tot_anchors, 2)
-            'num_tot_anchors': sum(anchors_per_scale),
             'anchor_scale_idxs': torch.tensor(anchor_scale_idxs),
             'anchors_per_scale': torch.tensor(anchors_per_scale)
         }
@@ -682,7 +681,6 @@ class DetectionDatasetBase(ABC, Dataset):
                                                (xmin, ymin, width, height, object confidence, class scores).
         '''
         anchors_wh = self.anchors_info['anchors_wh']
-        num_tot_anchors = self.anchors_info['num_tot_anchors']
         anchor_scale_idxs = self.anchors_info['anchor_scale_idxs']
         anchors_per_scale = self.anchors_info['anchors_per_scale']
         
@@ -698,25 +696,19 @@ class DetectionDatasetBase(ABC, Dataset):
 
         labels = anno_info['labels']
 
-        # Shape of bboxes_cxcywh and bboxes_xyxy: (num_bboxes, 4)
-        # bboxes_cxcywh and bboxes_xyxy should be in units of the input size (pixel)
-        bboxes_xyxy = box_convert(
+        # Shape of bboxes_cxcywh: (num_bboxes, 4)
+        # Units of bboxes_cxcywh: pixels (i.e. wrt the input shape)
+        bboxes_cxcywh = box_convert(
             boxes = anno_info['boxes'], 
             in_fmt = anno_info['boxes'].format.value.lower(),
-            out_fmt = 'xyxy'
+            out_fmt = 'cxcywh'
         )
-
-        # # Clamp to ensure all bboxes are within image 
-        # bboxes_xyxy[:, ::2] = bboxes_xyxy[:, ::2].clamp(0, img_w)
-        # bboxes_xyxy[:, 1::2] = bboxes_xyxy[:, 1::2].clamp(0, img_h)
-        bboxes_cxcywh = convert.xyxy_to_cxcywh(bboxes_xyxy)
 
         # Filter out objects that may have been too cut off due to transforms
         min_size_tensor = self.min_box_scale * torch.tensor(input_size).flip(dims = [0]) # (min_width, min_height)
         valid_mask = (bboxes_cxcywh[:, 2:] > min_size_tensor).all(dim = 1)
 
         bboxes_cxcywh = bboxes_cxcywh[valid_mask]
-        bboxes_xyxy = bboxes_xyxy[valid_mask]
         labels = labels[valid_mask]
 
         if obj_weights is None:
@@ -725,17 +717,18 @@ class DetectionDatasetBase(ABC, Dataset):
             obj_weights = obj_weights[valid_mask]
 
         # Loop over objects in the image and assign them to an anchor/scale
-        for label, bbox_cxcywh, bbox_xyxy, obj_weight in zip(labels, bboxes_cxcywh, bboxes_xyxy, obj_weights):
+        for label, bbox_cxcywh, obj_weight in zip(labels, bboxes_cxcywh, obj_weights):
             cx, cy, w, h = bbox_cxcywh
-
-            cxcy = bbox_cxcywh[:2].repeat(num_tot_anchors, 1) # Shape: (num_tot_anchors, 2)
-            bbox_anchors = torch.concat([cxcy, anchors_wh], dim = -1) # Shape: (num_tot_anchors, 4); Format: CXCYWH
-            bbox_anchors = convert.cxcywh_to_xyxy(bbox_anchors) # Convert CXCYWH to XYXY
 
             # -------------------------------
             # Assign Responsible Anchor Box
             # -------------------------------
-            ious = evaluate.calc_ious(bbox_xyxy.unsqueeze(0), bbox_anchors).squeeze() # Shape: (num_tot_anchors,)
+            # Shape of ious: (num_tot_anchors,)
+            ious = evaluate.calc_ious_wh(
+                bbox_whs_1 = bbox_cxcywh[2:].unsqueeze(0),
+                bbox_whs_2 = anchors_wh
+            ).squeeze(0)
+
             _, topk_idxs = ious.topk(k = 4)  # Only consider top 4 anchors for assignment
             for topk_idx in topk_idxs:
                 scale_idx = anchor_scale_idxs[topk_idx]
@@ -755,8 +748,8 @@ class DetectionDatasetBase(ABC, Dataset):
                 targ_x = (cx / stride_w) - grid_x # x-offset within the cell (in [0, 1])
                 targ_y = (cy / stride_h) - grid_y # y-offset within the cell (in [0, 1])
 
-                targ_w = torch.log(w / anchor_w) # normalized width in log-scale
-                targ_h = torch.log(h / anchor_h) # normalized height in log-scale
+                targ_w = torch.log(w / anchor_w) # Normalized width in log-scale
+                targ_h = torch.log(h / anchor_h) # Normalized height in log-scale
 
                 if scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 4] == 0:
                     targ_bbox = torch.tensor([targ_x, targ_y, targ_w, targ_h, obj_weight], dtype = torch.float32)
@@ -764,7 +757,7 @@ class DetectionDatasetBase(ABC, Dataset):
 
                     # One-hot encode the class label
                     # Note: I don't think I need to multiply by obj_weight, since this is P(class|object)
-                    scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 5 + label] = 1
+                    scale_targs[scale_idx][anchor_idx, grid_y, grid_x, 5 + label] = 1.0
 
                     # -------------------------------
                     # Assign Ignore Anchor Boxes
@@ -785,7 +778,7 @@ class DetectionDatasetBase(ABC, Dataset):
                                         
                         # Object score of -1 implies ignore this cell during loss calculation
                         if scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] == 0:
-                            scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] = -1
+                            scale_targs[ig_scale_idx][ig_anchor_idx, ig_grid_y, ig_grid_x, 4] = -1.0
 
                     break  # Once assigned, stop trying to assign
         return scale_targs

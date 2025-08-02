@@ -30,15 +30,11 @@ def make_module(cfg_dict: Dict[str, str]) -> Tuple[nn.Module, Optional[dict]]:
 
     Returns:
         module (nn.Module): A PyTorch module corresponding to the specified layer.
-        scale_info (Optional[dict]): For 'yolo' layers, a dictionary containing:
+        scale_info (Optional[dict]): For 'yolo' layers, a dictionary containing scale information such as:
             - 'anchors' (List[Tuple[float, float]]): Anchor box dimensions (width, height) for this scale.
             - 'num_classes' (int): Number of class labels.
-            - 'ignore_thresh' (float): IoU threshold for ignoring predictions during training (used in anchor-matching).
-            - 'truth_thresh' (float): IoU threshold for treating predictions as positive during training.
-            - 'jitter' (float): Data augmentation jitter parameter.
-            - 'random' (int): Flag for applying random resizing during training (multi-scale training).
 
-            For more information on these keys, refer to: 
+            For more information on keys, refer to: 
                 https://github.com/AlexeyAB/darknet/wiki/CFG-Parameters-in-the-different-layers
                                
             Returns None for non-'yolo' layers.
