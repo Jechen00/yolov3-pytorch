@@ -73,7 +73,7 @@ The setup is similar to step 3:
 
 <br></br>
 ## Custom Dataset Instructions
-An demonstration for how to create a custom dataset class can be found in this [Jupyter Notebook](https://github.com/Jechen00/yolov3-pytorch/blob/main/notebooks/custom_dataset_demo.ipynb).
+A demonstration on how to create a custom dataset class can be found in this [Jupyter Notebook](https://github.com/Jechen00/yolov3-pytorch/blob/main/notebooks/custom_dataset_demo.ipynb).
 
 ### 1) Create a `.names` File
 This is a plain text file listing all class names in your custom dataset, with one class per line.
