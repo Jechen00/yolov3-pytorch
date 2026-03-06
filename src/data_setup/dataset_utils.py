@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from urllib.parse import urlparse
 import seaborn as sns
 import random
+import warnings
 from typing import Tuple, List, Union, Callable, Optional, Literal, Dict, Any
 
 from src import evaluate
@@ -71,9 +72,9 @@ def load_classes(
 
     Args:
         label_path (str): The path to a `.names` file to load class labels.
-        return_idx_maps (bool): Whether to return an additional dictionary
-                                for mapping class labels to indices.
-                                Default is True.
+        return_idx_map (bool): Whether to return an additional dictionary
+                               for mapping class labels to indices.
+                               Default is True.
         clr_shuffle_seed (optional, int): A random seed used to shuffle the class colors from `sns.color_palette`.
                                           If not provided, colors are not shuffled. Default is None.
 
@@ -81,7 +82,7 @@ def load_classes(
         class_names (list): List of class labels.
         class_clrs (list): List of RGB color tuples from `sns.color_palette` in normalized float format.
 
-        If `return_idx_maps = True`:
+        If `return_idx_map = True`:
             class_to_idx (dict): Dictionary mapping class labels to a unique index.
     '''
     with open(label_path, 'r') as f:
@@ -109,7 +110,7 @@ def wh_k_means(bbox_whs: torch.Tensor,
     '''
     Performs k-means clustering on a set of bounding box (width, height) pairs 
     to compute `k` representative anchor boxes (cluster centroids).
-    This distance metric used is (1 - IoU), following typical YOLO models.
+    The distance metric used is (1 - IoU), following typical YOLO models.
 
     Args:
         bbox_whs (torch.Tensor): Tensor of shape (num_bboxes, 2) containing (width, height) 
@@ -236,7 +237,7 @@ class DetectionDatasetBase(ABC, Dataset):
 
         self.root = root
         self.label_path = label_path
-        self.scale_anchors = scale_anchors
+        self._scale_anchors = scale_anchors
         self.strides = [misc.make_tuple(stride) for stride in strides]
         self.default_input_size = misc.make_tuple(default_input_size)
         self.ignore_threshold = ignore_threshold
@@ -568,7 +569,8 @@ class DetectionDatasetBase(ABC, Dataset):
                                  scale_order: Literal['desc', 'asc'] = 'desc',
                                  max_iters: int = 1000,
                                  update_method: Literal['mean', 'median'] = 'mean',
-                                 input_size: Optional[Tuple[int, int]] = None):
+                                 input_size: Optional[Tuple[int, int]] = None,
+                                 replace: bool = False):
         '''
         Generates anchor boxes for each detection scale using k-means clustering 
         over the dataset's bounding box widths and heights.
@@ -592,6 +594,7 @@ class DetectionDatasetBase(ABC, Dataset):
             input_size (Optional[Tuple[int, int]]): Input size in (height, width) format.
                                                     If not provided, defaults to `self.default_input_size`.
                                                     Default is None.
+            replace (bool): Whether to replace the current `scale_anchors` in the dataset.
         '''
         input_size = self.default_input_size if input_size is None else input_size
         num_anchors = sum(anchors_per_scale)
@@ -623,9 +626,8 @@ class DetectionDatasetBase(ABC, Dataset):
                                  round_whs = True,
                                  area_order = scale_order,
                                  input_size = input_size)
-        
-        self.scale_anchors = list(torch.split(all_anchors, anchors_per_scale, dim = 0))
-        self.anchors_info = self._get_anchors_info() # Update anchor information
+        if replace:
+            self.scale_anchors = list(torch.split(all_anchors, anchors_per_scale, dim = 0))
 
     def _get_anchors_info(self) -> Dict[str, Any]:
         '''
@@ -676,7 +678,7 @@ class DetectionDatasetBase(ABC, Dataset):
                                                   an object confidence of P(object) = 1.
         Returns:
             scale_targs: (List[torch.Tensor]): List of YOLOv3-encoded ground truth targets, one per detection scale.
-                                               Each element is a tensor of shape: (batch_size, num_anchors, fmap_h, fmap_w, 5 + C),
+                                               Each element is a tensor of shape: (num_anchors, fmap_h, fmap_w, 5 + C),
                                                where the last dimension represents 
                                                (xmin, ymin, width, height, object confidence, class scores).
         '''
@@ -827,3 +829,23 @@ class DetectionDatasetBase(ABC, Dataset):
                                                          Shape is (num_objects, 4).
         '''
         pass
+
+    @property
+    def scale_anchors(self):
+        '''
+        List of anchor tensors for each scale of the model.
+
+        Calling this property returns the current list of anchors per scale.
+        Updating this property replaces the anchors and automatically updates the information in `self.anchors_info`.
+        '''
+        return self._scale_anchors
+    
+    @scale_anchors.setter
+    def scale_anchors(self, value):
+        warnings.warn(
+            '`scale_anchors` for this dataset has been changed. Ensure that any other parts of training/processing '
+            'that rely on these anchors are updated to match.',
+            UserWarning
+        )
+        self._scale_anchors = value
+        self.anchors_info = self._get_anchors_info
