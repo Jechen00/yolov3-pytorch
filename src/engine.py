@@ -11,6 +11,7 @@ from torchmetrics.detection.mean_ap import MeanAveragePrecision
 
 import os
 import time
+import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional, Union, Dict, Tuple, Any, Literal
 
@@ -73,39 +74,42 @@ def yolov3_train_step(
     num_samps = len(dataloader.dataset)
     loss_sums = {key: 0.0 for key in loss_fn.loss_keys}
     
-    full_accums = len(dataloader) // accum_steps # Number of full accumulation windows
-    optimizer_steps = 0 # Counter for number of optimizer steps
+    imgs, _ = next(iter(dataloader))
+    std_batch_size = imgs.shape[0] # Standard batch size
+    last_batch_size = (len(dataloader.dataset) % std_batch_size) or std_batch_size # Last batch size may be smaller
+
+    num_accums = np.ceil(len(dataloader) / accum_steps) # Number of accumulation windows
+    last_accum_size = (len(dataloader) % accum_steps) or accum_steps # Last accumulation window may be smaller
+    accum_window = 1 # Counter for the current accumulation window
 
     base_model.train()
     optimizer.zero_grad()
     for i, (imgs, scale_targs) in enumerate(dataloader):
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
-        batch_size = imgs.shape[0]
 
         scale_logits = base_model(imgs)
 
         # Compute loss for batch
-        loss_dict = loss_fn(scale_logits, scale_targs)
+        loss_dict = loss_fn(scale_logits, scale_targs, reduction = 'sum')
 
-        if optimizer_steps != full_accums:
-            accum_size = accum_steps
+        if accum_window < num_accums:
+            eff_batch_size = accum_steps * std_batch_size
         else:
-            # All full accumulation windows have been processed 
-                # Last window (if any) is partial and accumulates the remainder of batch sizes
-            accum_size = len(dataloader) % accum_steps
-
-        (loss_dict['total'] / accum_size).backward() # Backpropagate only through the total loss
+            # Last accumulation window. This may be a partial window.
+                # The last batch in this window may also be smaller.
+            eff_batch_size = (last_accum_size - 1) * std_batch_size + last_batch_size
+        
+        (loss_dict['total'] / eff_batch_size).backward() # Backpropagate only through the total loss
 
         for key in loss_sums:
-            loss_sums[key] += loss_dict[key].detach() * batch_size
+            loss_sums[key] += loss_dict[key].detach() # Reduction='sum', so no need to multiply by batch_size
 
         # Simulate a larger batch_size if needed
         last_batch = ((i + 1) == len(dataloader))
         if ((i + 1) % accum_steps == 0) or last_batch:
             optimizer.step()
             optimizer.zero_grad()
-            optimizer_steps += 1
 
             if scheduler is not None:
                 # Update optimizer learning rates per optimizer step
@@ -113,8 +117,10 @@ def yolov3_train_step(
 
             # Update EMA model if needed
             if ema is not None:
-                if (optimizer_steps % ema_update_interval == 0) or last_batch:
+                if (accum_window % ema_update_interval == 0) or last_batch:
                     ema.update()
+            
+            accum_window += 1
 
     return {key: loss_sums[key].item() / num_samps for key in loss_sums}
 
@@ -231,7 +237,6 @@ def yolov3_val_step(
     for imgs, scale_targs in dataloader:
         imgs = imgs.to(device)
         scale_targs = [targs.to(device) for targs in scale_targs]
-        batch_size = imgs.shape[0]
 
         if should_eval:
             # Target bboxes are in units of the input size (pixels)
@@ -245,9 +250,9 @@ def yolov3_val_step(
             with torch.inference_mode():
                 scale_logits = tracker['model'](imgs)
 
-            loss_dict = loss_fn(scale_logits, scale_targs)
+            loss_dict = loss_fn(scale_logits, scale_targs, reduction = 'sum')
             for key in loss_keys:
-                tracker['loss_sums'][key] += loss_dict[key] * batch_size
+                tracker['loss_sums'][key] += loss_dict[key] # Reduction='sum', so no need to multiply by batch_size
 
             if should_eval:
                 # Predicted bboxes are in units of the input size (pixels)

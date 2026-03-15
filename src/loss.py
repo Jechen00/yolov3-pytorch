@@ -203,7 +203,8 @@ class YOLOv3Loss(nn.Module):
     
     def forward(self,
                 scale_logits: List[torch.Tensor],
-                scale_targs: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
+                scale_targs: List[torch.Tensor],
+                reduction: Literal['sum', 'mean'] = 'mean') -> Dict[str, torch.Tensor]:
         '''
         Computes the YOLOv3 loss across a batch. Returns a dictionary containing the total loss and its unweighted components.
 
@@ -216,6 +217,10 @@ class YOLOv3Loss(nn.Module):
                                                Each target should match the format of the model outputs **after activation**,
                                                i.e., after applying sigmoid to box coordinates and object confidence,
                                                and sigmoid or softmax to class scores.
+            reduction (Literal['sum', 'mean']): The reduction to apply to each loss in the output.
+                                                    - 'sum': Returns the sum of loss values across the batch.
+                                                    - 'mean': Returns the mean of loss values across the batch.
+                                                Default is 'mean'.
         Returns:
             loss_dict (Dict[str, torch.Tensor]): Dictionary containing the loss component values (scalar tensors).
                                                  The keys are as follows:
@@ -321,8 +326,8 @@ class YOLOv3Loss(nn.Module):
                 #------------------
                 # Coordinate Loss
                 #------------------
-                # Apply sigmoid to t_x, t_y (center offsets)
-                preds = logits.clone()
+                # Apply sigmoid to tx, ty (center offsets)
+                preds = logits[..., :4].clone() # bbox predictions (tx, ty, tw, th)
                 preds[..., :2] = torch.sigmoid(preds[..., :2])
 
                 if not self.use_iou_coord:
@@ -372,8 +377,9 @@ class YOLOv3Loss(nn.Module):
             )
 
         # Divide by batch size to get mean across batch samples
-        batch_size = scale_targs[0].shape[0]
-        for key in loss_dict:
-            loss_dict[key] = loss_dict[key] / batch_size
+        if reduction == 'mean':
+            batch_size = scale_targs[0].shape[0]
+            for key in loss_dict:
+                loss_dict[key] = loss_dict[key] / batch_size
             
         return loss_dict
