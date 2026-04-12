@@ -8,3 +8,6 @@ data/voc/VOCdevkit/
 saved_models/
 saved_checkpoints/
 pretrained_weights/
+test_notebooks/
+test_imgs/
+test_config.yaml

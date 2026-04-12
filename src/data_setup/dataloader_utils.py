@@ -219,7 +219,6 @@ def get_dataloaders(
             
             sampler = MultiScaleBatchSampler(
                 sampler = RandomSampler(dataset),
-                dataset = dataset,
                 batch_size = batch_size,
                 default_input_size = default_input_size,
                 drop_last = False,
@@ -290,7 +289,7 @@ class DataLoaderBuilder():
         return DataLoader(dataset = self.dataset, **self.dataloader_kwargs)
     
 
-class MultiScaleBatchSampler(Sampler):
+class MultiScaleBatchSampler():
     '''
     Batch sampler with optional multiscale training for object detection models.
     At each iteration, this sampler yields a list of `(samp_idx, input_size)` pairs,
@@ -301,7 +300,6 @@ class MultiScaleBatchSampler(Sampler):
     Args:
         sampler (Union[Sampler[int], Iterable[int]]): Base sampler (e.g., RandomSampler or SequentialSampler)
                                                       used to sample image indices.
-        dataset (Datset): The dataset of which image indices will be sampled from.
         batch_size (int): Number of sample images per batch.
         default_input_size (Union[int, Tuple[int, int]]): The input size assigned to all batches 
                                                           if multiscale training is disabled (`multiscale_interval` is not provided).
@@ -326,7 +324,6 @@ class MultiScaleBatchSampler(Sampler):
     def __init__(
         self,
         sampler: Union[Sampler[int], Iterable[int]],
-        dataset: Dataset,
         batch_size: int,
         default_input_size: Union[int, Tuple[int, int]],
         drop_last: bool = False,
@@ -343,7 +340,6 @@ class MultiScaleBatchSampler(Sampler):
             self.multiscale_sizes = multiscale_sizes
             
         self.sampler = sampler
-        self.dataset = dataset
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.default_input_size = misc.make_tuple(default_input_size)

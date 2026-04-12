@@ -477,7 +477,7 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
                 # expects channels = num_anchors * (5 + C)
                 batch_size, channels, height, width = Y.shape
                 
-                # Reshape and permute to (batch_size, num_anchors, S, S, C + 5)
+                # Reshape and permute to (batch_size, num_anchors, fmap_height, fmap_width, 5 + C)
                 scale_Y = Y.reshape(batch_size, len(scale_cfg['anchors']), 
                                     scale_cfg['num_classes'] + 5, height, width)
                 scale_Y = scale_Y.permute(0, 1, 3, 4, 2)
