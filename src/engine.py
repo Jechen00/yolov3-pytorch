@@ -291,8 +291,8 @@ def train(
     val_builder: DataLoaderBuilder,
     loss_fn: loss.YOLOv3Loss,
     optimizer: Optimizer,
-    te_cfgs: TrainEvalConfigs,
-    ckpt_cfgs: CheckpointConfigs,
+    te_cfg: TrainEvalConfig,
+    ckpt_cfg: CheckpointConfig,
     scheduler: Optional[lr_scheduler._LRScheduler] = None,
     ema: Optional[EMA] = None,
     device: Union[torch.device, str] = 'cpu'
@@ -316,11 +316,11 @@ def train(
         val_builder (DataLoaderBuilder): Builder that constructs the Dataloader for the validation dataset.
         loss_fn (loss.YOLOv3Loss): The YOLOv3 loss function used to compute training/validation error. 
         optimizer (Optimizer): Optimizer used to update `base_model` parameters every accumulated batch.
-        te_cfgs (TrainEvalConfigs): Configuration dataclass for training and evaluation parameters.
-        ckpt_cfgs (CheckpointConfigs): Configuration dataclass for saving and resuming checkpoints.
+        te_cfg (TrainEvalConfig): Configuration dataclass for training and evaluation parameters.
+        ckpt_cfg (CheckpointConfig): Configuration dataclass for saving and resuming checkpoints.
         scheduler (optional, lr_scheduler._LRScheduler): Learning rate scheduler. 
-                                                         If provided and resuming from a checkpoint (`ckpt_cfgs.resume = True`),
-                                                         the checkpoint file at `ckpt_cfgs.resume_path` must also include a scheduler. 
+                                                         If provided and resuming from a checkpoint (`ckpt_cfg.resume = True`),
+                                                         the checkpoint file at `ckpt_cfg.resume_path` must also include a scheduler. 
                                                          Default is None, which disables scheduling entirely — even when resuming.
         ema (optional, EMA): An instance of the EMA class used to maintain an EMA of `base_model` parameters.
                              The model at `ema.ema_model` should already be on `device`.
@@ -367,9 +367,9 @@ def train(
             'to support disabling multi-image augmentations.'
         )
     
-    if te_cfgs.multi_aug_decay_range is not None:
+    if te_cfg.multi_aug_decay_range is not None:
         orig_multi_aug_prob = train_builder.dataset.multi_aug_prob
-        assert te_cfgs.multi_aug_decay_range[1] > te_cfgs.multi_aug_decay_range[0], (
+        assert te_cfg.multi_aug_decay_range[1] > te_cfg.multi_aug_decay_range[0], (
             '`multi_aug_decay_range` must be in the form (start_epoch, end_epoch) where `end_epoch > start_epoch`'
         )
 
@@ -382,15 +382,15 @@ def train(
     log_divider = '-' * divider_len
     end_divider = '=' * divider_len
 
-    if ckpt_cfgs.save_path is not None:
+    if ckpt_cfg.save_path is not None:
         print(
-            f'{BOLD_START}[NOTE]{BOLD_END} Checkpoints will be saved to {ckpt_cfgs.save_path}.'
+            f'{BOLD_START}[NOTE]{BOLD_END} Checkpoints will be saved to {ckpt_cfg.save_path}.'
         )
     
     # Load checkpoint if needed
-    if ckpt_cfgs.resume:
+    if ckpt_cfg.resume:
         checkpoint_epoch, base_train_losses, val_losses, eval_histories = misc.load_checkpoint(
-            checkpoint_path = ckpt_cfgs.resume_path,
+            checkpoint_path = ckpt_cfg.resume_path,
             base_model = base_model,
             optimizer = optimizer,
             scheduler = scheduler,
@@ -400,7 +400,7 @@ def train(
         start_epoch = checkpoint_epoch + 1
         print(
             f'{BOLD_START}[NOTE]{BOLD_END} '
-            f'Successfully loaded checkpoint at {ckpt_cfgs.resume_path}. '
+            f'Successfully loaded checkpoint at {ckpt_cfg.resume_path}. '
             f'Resuming training from epoch {start_epoch}.'
         )
 
@@ -425,16 +425,16 @@ def train(
         dataloader = train_loader,
         loss_fn = loss_fn, 
         optimizer = optimizer,
-        scheduler = None if te_cfgs.scheduler_freq == 'epoch' else scheduler,
+        scheduler = None if te_cfg.scheduler_freq == 'epoch' else scheduler,
         ema = ema,
-        accum_steps = te_cfgs.accum_steps, 
-        ema_update_interval = te_cfgs.ema_update_interval,
+        accum_steps = te_cfg.accum_steps, 
+        ema_update_interval = te_cfg.ema_update_interval,
         device = device
     )
 
     # Start of training and evaluation
     print() # A line break between start logs and training logs
-    for epoch in range(start_epoch, te_cfgs.num_epochs):
+    for epoch in range(start_epoch, te_cfg.num_epochs):
         # Construct top divider indicating epoch number
         epoch_str = f' EPOCH {epoch:>3} '
         side_len = (divider_len - len(epoch_str)) // 2
@@ -452,14 +452,14 @@ def train(
 
         # Determine if multi-image augmentation probability should decay
         decay_multi_aug_prob = (
-            (te_cfgs.multi_aug_decay_range is not None) and
-            (epoch >= te_cfgs.multi_aug_decay_range[0]) and 
+            (te_cfg.multi_aug_decay_range is not None) and
+            (epoch >= te_cfg.multi_aug_decay_range[0]) and 
             (train_builder.dataset.multi_aug_prob > 0)
         )
         if decay_multi_aug_prob:
             # The range of decay is [multi_aug_decay_range[0], multi_aug_decay_range[1])
-            range_diff = te_cfgs.multi_aug_decay_range[1] - te_cfgs.multi_aug_decay_range[0]
-            decay_progress = ((epoch + 1) - te_cfgs.multi_aug_decay_range[0]) / range_diff
+            range_diff = te_cfg.multi_aug_decay_range[1] - te_cfg.multi_aug_decay_range[0]
+            decay_progress = ((epoch + 1) - te_cfg.multi_aug_decay_range[0]) / range_diff
             multi_aug_prob = max(0, orig_multi_aug_prob * (1 - decay_progress))
 
             train_builder.dataset.multi_aug_prob = multi_aug_prob # Change multi_aug_prob in the main dataset
@@ -475,7 +475,7 @@ def train(
         train_avgs = yolov3_train_step(**train_kwargs)
         
         # Step scheduler if learning rates should only be updated at the end of each training loop
-        if (scheduler is not None) and (te_cfgs.scheduler_freq == 'epoch'):
+        if (scheduler is not None) and (te_cfg.scheduler_freq == 'epoch'):
             scheduler.step() 
 
         # Store and log each average loss
@@ -500,10 +500,10 @@ def train(
 
         # Evaluate metrics (mAP) at specified intervals and at the final epoch
         should_eval = False
-        if epoch == (te_cfgs.num_epochs - 1):
+        if epoch == (te_cfg.num_epochs - 1):
             should_eval = True
-        elif (te_cfgs.eval_interval is not None) and (epoch >= te_cfgs.eval_start_epoch):
-            if (epoch - te_cfgs.eval_start_epoch) % te_cfgs.eval_interval == 0:
+        elif (te_cfg.eval_interval is not None) and (epoch >= te_cfg.eval_start_epoch):
+            if (epoch - te_cfg.eval_start_epoch) % te_cfg.eval_interval == 0:
                 should_eval = True
 
         # Compute average losses over batches and eval metrics
@@ -514,13 +514,13 @@ def train(
             loss_fn = loss_fn,
             ema = ema,
             should_eval = should_eval,
-            scale_anchors = te_cfgs.scale_anchors, 
-            strides = te_cfgs.strides,
-            obj_threshold = te_cfgs.obj_threshold,
-            nms_threshold = te_cfgs.nms_threshold, 
-            map_thresholds = te_cfgs.map_thresholds,
+            scale_anchors = te_cfg.scale_anchors, 
+            strides = te_cfg.strides,
+            obj_threshold = te_cfg.obj_threshold,
+            nms_threshold = te_cfg.nms_threshold, 
+            map_thresholds = te_cfg.map_thresholds,
             device = device,
-            **te_cfgs.map_kwargs
+            **te_cfg.map_kwargs
         )
 
         # Store and log each average validation loss
@@ -556,7 +556,7 @@ def train(
         # -------------------------
         # Saving and Logs
         # -------------------------
-        if ckpt_cfgs.save_path is not None:
+        if ckpt_cfg.save_path is not None:
             misc.save_checkpoint(base_model = base_model, 
                                  optimizer = optimizer, 
                                  scheduler = scheduler,
@@ -565,7 +565,7 @@ def train(
                                  val_losses = val_losses,
                                  eval_histories = eval_histories,
                                  checkpoint_epoch = epoch,
-                                 save_path = ckpt_cfgs.save_path)
+                                 save_path = ckpt_cfg.save_path)
         
         # Print all epoch logs
         for log in epoch_logs:
@@ -579,7 +579,7 @@ def train(
 # Data Classes
 #####################################  
 @dataclass
-class TrainEvalConfigs():
+class TrainEvalConfig():
     '''
     Data class for setting YOLOv3 training and evaluation configurations.
 
@@ -659,7 +659,7 @@ class TrainEvalConfigs():
         self.map_thresholds = [0.5] if self.map_thresholds is None else self.map_thresholds
         
 @dataclass
-class CheckpointConfigs():
+class CheckpointConfig():
     '''
     Data class for setting checkpoint saving and resuming configurations.
 

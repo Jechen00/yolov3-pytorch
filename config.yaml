@@ -1,10 +1,10 @@
-# Note: These default configs are based on those used in notebooks/yolov3_training.ipynb (Used A100 in Google Colab)
+# Note: This default config is based on those used in notebooks/yolov3_training.ipynb (Used A100 in Google Colab)
 experiment: yolov3_voc           # YOLOv3 model training on Pascal VOC dataset
 
-# Device Configs
+# Device Config
 device: null                      # If null, run_training.py will use constants.DEVICE
 
-# Base model Configs
+# Base model Config
 base_model:
   backbone_cfg: ./model_configs/darknet53_backbone.cfg               # Using DarkNet53 backbone
   backbone_weights: ./pretrained_weights/yolov3_backbone_416_coco.weights      # Using weights pretrained on MS-COCO
@@ -12,13 +12,13 @@ base_model:
   input_shape: [1, 3, 416, 416]
 
 
-# EMA model Configs
+# EMA model Config
 ema:
   use_ema: true
   decay: 0.999
 
 
-# Dataloader Configs
+# Dataloader Config
 dataloader:
   # scale_anchors, strides, and default_input_size inherited from model
   root: ./data/voc
@@ -37,7 +37,7 @@ dataloader:
   multiscale_sizes: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608]
 
 
-# Loss Function Configs
+# Loss Function Config
 loss_fn:
   # scale_anchors and strides inherited from model
   lambda_coord: 1.5
@@ -58,14 +58,14 @@ loss_fn:
   ignore_threshold: 0.75          # Ignores based on prediction and GT IoUs
 
 
-# SGD optimizer Configs
+# SGD optimizer Config
 optimizer:
   momentum: 0.9
   lr: 1.0e-3
   weight_decay: 5.0e-4
 
 
-# Learning Rate Scheduler Configs (Cosine Annealing with Warm-up)
+# Learning Rate Scheduler Config (Cosine Annealing with Warm-up)
 scheduler:
   static_args:                    # Fixed/static scheduler args
     pre_warmup_lrs: 1.0e-4
@@ -76,7 +76,7 @@ scheduler:
     warmup_steps: 5
 
 
-# Training/Evaluation Configs
+# Training/Evaluation Config
 train_eval:
   # scale_anchors and strides inherited from model
   num_epochs: 150
@@ -93,7 +93,7 @@ train_eval:
   map_thresholds: [0.5]
 
 
-# Checkpoint Configs
+# Checkpoint Config
 checkpoint:
   save_dir: ./saved_checkpoints
   checkpoint_name: yolov3_voc_checkpoint.pth

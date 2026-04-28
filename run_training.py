@@ -19,13 +19,13 @@ from src import loss, schedulers, engine
 #####################################
 # Functions
 #####################################
-def load_configs():
+def load_config():
     # Set configuration file as a hyperparameter
     parser = argparse.ArgumentParser(description = 'Train YOLOv3 model')
     parser.add_argument('-cf', '--config-file', 
                         help = 'Path to the configuration YAML file.',
                         type = str, 
-                        default = 'configs.yaml')
+                        default = 'config.yaml')
     
     args = parser.parse_args()
     
@@ -33,9 +33,9 @@ def load_configs():
         raise FileNotFoundError(f'Config file not found: {args.config_file}')
 
     with open(args.config_file, 'r') as f:
-        configs = yaml.safe_load(f)
+        config = yaml.safe_load(f)
 
-    return configs
+    return config
 
 
 #####################################
@@ -43,43 +43,43 @@ def load_configs():
 #####################################
 if __name__ == '__main__':
     misc.set_seed(0) # Set seed for reproducibility
-    configs = load_configs()
-    device = torch.device(configs['device']) if configs['device'] is not None else constants.DEVICE
+    config = load_config()
+    device = torch.device(config['device']) if config['device'] is not None else constants.DEVICE
     
     
     # ---------------------------
     # Base and EMA Model
     # ---------------------------
-    base_model_cfgs = configs['base_model']
-    ema_cfgs = configs['ema']
+    base_model_cfg = config['base_model']
+    ema_cfg = config['ema']
 
     # Using DarkNet53 backbone, as per YOLOv3 paper
-    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfgs['backbone_cfg'])
-    if base_model_cfgs['backbone_weights'] is not None:
-        darknet53_backbone.load_weights_file(weights_file = base_model_cfgs['backbone_weights'], 
-                                             input_shape = tuple(base_model_cfgs['input_shape']))
+    darknet53_backbone = builder.DarkNet53Backbone(cfg_file = base_model_cfg['backbone_cfg'])
+    if base_model_cfg['backbone_weights'] is not None:
+        darknet53_backbone.load_weights_file(weights_file = base_model_cfg['backbone_weights'], 
+                                             input_shape = tuple(base_model_cfg['input_shape']))
 
     base_model = builder.YOLOv3(backbone = darknet53_backbone, 
-                                neck_heads_cfg = base_model_cfgs['neck_heads_cfg'])
+                                neck_heads_cfg = base_model_cfg['neck_heads_cfg'])
 
-    if ema_cfgs['use_ema']:
+    if ema_cfg['use_ema']:
         ema = ema_model.EMA(base_model = base_model, 
-                            decay = ema_cfgs['decay'], 
-                            input_shape = tuple(base_model_cfgs['input_shape']))
+                            decay = ema_cfg['decay'], 
+                            input_shape = tuple(base_model_cfg['input_shape']))
     else:
         ema = None
 
     if device.type == 'cuda':
         base_model.compile(dynamic = True)
 
-        if ema_cfgs['use_ema']:
+        if ema_cfg['use_ema']:
             ema.compile(dynamic = True)
 
     base_model = base_model.to(device)
-    if ema_cfgs['use_ema']:
+    if ema_cfg['use_ema']:
         ema.to(device)
 
-    scale_anchors, strides, _ = base_model.infer_scale_info(base_model_cfgs['input_shape'])
+    scale_anchors, strides, _ = base_model.infer_scale_info(base_model_cfg['input_shape'])
 
 
     # -------------
@@ -88,11 +88,11 @@ if __name__ == '__main__':
     builders = dataloader_utils.get_dataloaders(
         scale_anchors = scale_anchors,
         strides = strides,
-        default_input_size = base_model_cfgs['input_shape'][-1],
+        default_input_size = base_model_cfg['input_shape'][-1],
         return_builders = True,
         device = device,
         splits = ['train', 'val'],
-        **configs['dataloader']
+        **config['dataloader']
     )
 
 
@@ -102,18 +102,18 @@ if __name__ == '__main__':
     loss_fn = loss.YOLOv3Loss(
         scale_anchors = scale_anchors,
         strides = strides,
-        **configs['loss_fn']
+        **config['loss_fn']
     )
 
     optimizer = optim.SGD(
         base_model.parameters(),
-        **configs['optimizer']
+        **config['optimizer']
     )
 
     # Change scheduler timing arguments depending on the frequency of steps
-    scheduler_timing_args = configs['scheduler']['timing_args']
-    if configs['train_eval']['scheduler_freq'] == 'optim_step':
-        effective_batch_size = configs['dataloader']['batch_size'] * configs['train_eval']['accum_steps']
+    scheduler_timing_args = config['scheduler']['timing_args']
+    if config['train_eval']['scheduler_freq'] == 'optim_step':
+        effective_batch_size = config['dataloader']['batch_size'] * config['train_eval']['accum_steps']
         num_optim_steps = math.ceil(len(builders['train'].dataset) / effective_batch_size)
 
         for key, value in scheduler_timing_args.items():
@@ -121,7 +121,7 @@ if __name__ == '__main__':
 
     scheduler = schedulers.WarmupCosineAnnealingLR(
         optimizer,
-        **configs['scheduler']['static_args'],
+        **config['scheduler']['static_args'],
         **scheduler_timing_args
     )
     
@@ -129,15 +129,15 @@ if __name__ == '__main__':
     # Data Class Configs
     # ---------------------------
     # Training/Evaluation Configs
-    te_cfgs = engine.TrainEvalConfigs(
+    te_cfg = engine.TrainEvalConfig(
         scale_anchors = scale_anchors,
         strides = strides,
-        **configs['train_eval']
+        **config['train_eval']
     )
 
     # Checkpoint Configs
-    ckpt_cfgs = engine.CheckpointConfigs(
-        **configs['checkpoint']
+    ckpt_cfg = engine.CheckpointConfig(
+        **config['checkpoint']
     )
 
 
@@ -152,8 +152,8 @@ if __name__ == '__main__':
         optimizer = optimizer,
         scheduler = scheduler,
         ema = ema,
-        te_cfgs = te_cfgs,
-        ckpt_cfgs = ckpt_cfgs,
+        te_cfg = te_cfg,
+        ckpt_cfg = ckpt_cfg,
         device = device
     )
     

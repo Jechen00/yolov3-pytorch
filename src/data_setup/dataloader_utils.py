@@ -186,7 +186,7 @@ def get_dataloaders(
     train_post_multi_augs = transforms.get_post_multi_transforms(aug_only = True)
     valtest_single_augs = transforms.get_single_transforms(train = False, aug_only = True)
 
-    # Set device-dependent dataloader configs:
+    # Set device-dependent dataloader config:
     device = torch.device(device)
     if device.type == 'cuda':
         mp_context = None

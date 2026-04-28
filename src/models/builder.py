@@ -374,7 +374,7 @@ class YOLOv3Full(nn.Module, yolo_loader.WeightLoadable):
     This follows the original `.cfg` structure from https://github.com/pjreddie/darknet/blob/master/cfg/yolov3.cfg.
 
     Args:
-        cfg_file: Path to a `.cfg` file for the full YOLOv3 model configs.
+        cfg_file: Path to a `.cfg` file for the full YOLOv3 model config.
     '''
     def __init__(self, cfg_file: str):
         super().__init__()
