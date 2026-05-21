@@ -63,9 +63,9 @@ def download_with_curl(url: str, download_dir: str, unzip: bool = False):
     print(f'{BOLD_START}[ALERT]{BOLD_END} Download and/or extraction complete')
 
 def load_classes(
-        label_path: str, 
-        return_idx_map: bool = True,
-        clr_shuffle_seed: Optional[int] = None
+    label_path: str, 
+    return_idx_map: bool = True,
+    clr_shuffle_seed: Optional[int] = None
 ) -> Union[Tuple[list, list], Tuple[list, list, dict, dict]]:
     '''
     Loads the class names and colors of a dataset using a `.names` file located at `label_path`.
@@ -219,20 +219,22 @@ class DetectionDatasetBase(ABC, Dataset):
     they can be optionally regenerated using the method `regenerate_scale_anchors(...)`.
     This will generate a new set of anchors using the dataset and k-means clustering.
     '''
-    def __init__(self, 
-                 root: str,
-                 label_path: str,
-                 scale_anchors: List[torch.Tensor],
-                 strides: List[Union[int, Tuple[int, int]]],
-                 ignore_threshold: float = 0.5,
-                 default_input_size: Union[int, Tuple[int, int]] = (416, 416),
-                 single_augs: Optional[Callable] = None,
-                 multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
-                 post_multi_augs: Optional[Callable] = None,
-                 multi_aug_prob: float = 0.0,
-                 mixup_alpha: float = 1.0,
-                 min_box_scale: float = 0.01,
-                 display_name: Optional[str] = None):
+    def __init__(
+        self, 
+        root: str,
+        label_path: str,
+        scale_anchors: List[torch.Tensor],
+        strides: List[Union[int, Tuple[int, int]]],
+        ignore_threshold: float = 0.5,
+        default_input_size: Union[int, Tuple[int, int]] = (416, 416),
+        single_augs: Optional[Callable] = None,
+        multi_augs: Union[Literal['mosaic', 'mixup'], List[Literal['mosaic', 'mixup']]] = 'mosaic',
+        post_multi_augs: Optional[Callable] = None,
+        multi_aug_prob: float = 0.0,
+        mixup_alpha: float = 1.0,
+        min_box_scale: float = 0.01,
+        display_name: Optional[str] = None
+    ):
         super().__init__()
 
         self.root = root
@@ -285,8 +287,8 @@ class DetectionDatasetBase(ABC, Dataset):
         return textwrap.dedent(dataset_str)
     
     def __getitem__(
-            self, 
-            input_info: Union[Tuple[int, Union[int, Tuple[int, int]]], int]
+        self, 
+        input_info: Union[Tuple[int, Union[int, Tuple[int, int]]], int]
     ) -> Tuple[Union[Image.Image, torch.Tensor], List[torch.Tensor]]:
         '''
         Gets the transformed image and encoded targets for a given index.
@@ -325,9 +327,9 @@ class DetectionDatasetBase(ABC, Dataset):
             return self.load_single_image_and_targets(idx, input_size) 
         
     def load_single_image_and_targets(
-            self, 
-            idx: int,
-            input_size: Union[int, Tuple[int, int]],
+        self, 
+        idx: int,
+        input_size: Union[int, Tuple[int, int]],
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         '''
         Loads a single transformed image and its encoded targets, given an index.
@@ -370,9 +372,9 @@ class DetectionDatasetBase(ABC, Dataset):
         return img, scale_targs
     
     def load_mosaic_image_and_targets(
-            self, 
-            idx: int,
-            input_size: Union[int, Tuple[int, int]]
+        self, 
+        idx: int,
+        input_size: Union[int, Tuple[int, int]]
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         '''
         Loads a 2x2 mosaic of 4 images along with their corresponding encoded targets. 
@@ -406,7 +408,9 @@ class DetectionDatasetBase(ABC, Dataset):
         # -------------------
         # Creating Mosaic
         # -------------------
-        mosaic_img = Image.new('RGB', (2 * input_w, 2 * input_h), color = (114, 114, 114))
+        ref_img = self.get_img(0)
+        pil_mode = ref_img.mode
+        mosaic_img = Image.new(pil_mode, (2 * input_w, 2 * input_h), color = 114)
         mosaic_positions = [(0, 0), (input_w, 0), (input_w, input_h), (0, input_h)]
 
         for img_idx, img_pos in zip(all_img_idxs, mosaic_positions):
@@ -491,9 +495,9 @@ class DetectionDatasetBase(ABC, Dataset):
         return mosaic_img, scale_targs
     
     def load_mixup_image_and_targets(
-            self, 
-            idx: int,
-            input_size: Union[int, Tuple[int, int]]
+        self, 
+        idx: int,
+        input_size: Union[int, Tuple[int, int]]
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         '''
         Loads a mix-up of 2 image along with their corresponding encoded targets. 
@@ -564,13 +568,15 @@ class DetectionDatasetBase(ABC, Dataset):
 
         return mixup_img, scale_targs
 
-    def regenerate_scale_anchors(self, 
-                                 anchors_per_scale: Tuple[int] = (3, 3, 3), 
-                                 scale_order: Literal['desc', 'asc'] = 'desc',
-                                 max_iters: int = 1000,
-                                 update_method: Literal['mean', 'median'] = 'mean',
-                                 input_size: Optional[Tuple[int, int]] = None,
-                                 replace: bool = False):
+    def regenerate_scale_anchors(
+        self, 
+        anchors_per_scale: Tuple[int] = (3, 3, 3), 
+        scale_order: Literal['desc', 'asc'] = 'desc',
+        max_iters: int = 1000,
+        update_method: Literal['mean', 'median'] = 'mean',
+        input_size: Optional[Tuple[int, int]] = None,
+        replace: bool = False
+    ):
         '''
         Generates anchor boxes for each detection scale using k-means clustering 
         over the dataset's bounding box widths and heights.
@@ -658,10 +664,10 @@ class DetectionDatasetBase(ABC, Dataset):
         return anchors_info
 
     def _encode_yolov3_targets(
-            self, 
-            anno_info: Dict[str, Any], 
-            obj_weights: Optional[torch.Tensor] = None
-        ) -> List[torch.Tensor]:
+        self, 
+        anno_info: Dict[str, Any], 
+        obj_weights: Optional[torch.Tensor] = None
+    ) -> List[torch.Tensor]:
         '''
         Creates a list of YOLOv3-encoded targets (one per detection scale), given annotation information.
 
@@ -798,14 +804,13 @@ class DetectionDatasetBase(ABC, Dataset):
     @abstractmethod
     def get_img(self, idx: int) -> Image.Image:
         '''
-        Loads an original image from the dataset and converts it to RGB format
+        Loads an original image from the dataset
 
         Args:
             idx (int): Index of the image in the dataset.
 
         Returns:
-            Image.Image: The original image in RGB format,
-                          before any additional transforms are applied.
+            Image.Image: The original image, before any transforms are applied.
         '''
         pass
 

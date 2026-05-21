@@ -8,9 +8,11 @@ from torchvision.ops import box_convert
 from torchvision.tv_tensors import BoundingBoxes
 
 from PIL import Image
-from typing import Tuple, Union, Optional, Literal, Dict, Any
+from typing import Tuple, Union, Optional, Literal, Dict, Any, Sequence, TypeAlias
 
 from src.utils import misc
+
+FillValue: TypeAlias = Union[float, int, Sequence[float], Sequence[int]]
 
 
 #####################################
@@ -170,7 +172,7 @@ def functional_letterbox(
     img: Union[Image.Image, torch.Tensor],
     size: Union[int, Tuple[int, int]], 
     anno_info: Optional[Dict[str, Any]] = None, 
-    fill: Union[int, Tuple[int, int, int]] = 0,
+    fill: FillValue = 0,
     return_bbox_fmt: Literal['orig', 'xyxy', 'cxcywh'] = 'orig'
 ) -> Tuple[Union[Image.Image, torch.Tensor], Optional[Dict[str, Any]]]:
     '''
@@ -190,8 +192,14 @@ def functional_letterbox(
                                                                                 in XYXY format and in pixel units 
                                                                                 (canvas is the image size). 
                                                                                 Shape is (num_objects, 4).
-        fill (Union[int, Tuple[int, int, int]]): The fill color to use for padding, in the form of a RGB tuple.
-                                                 If `int`, it is assumed that the fill color is the same for all RGB channels.
+        fill (FillValue): Pixel fill value used to pad the transformed image. 
+                          This can be a float, integer, sequence of floats, or sequence of integers.
+                          If scalar (float or integer), the value is used for all channels.
+                          If sequence, its length must match the number of channels in the input image.
+                          The fill value should be in the same value space as the expected input images.
+                          For example, if the input images are scaled to [0, 1], 
+                          `fill` should also be scaled to [0, 1].
+                          Default is `0`.
         return_bbox_fmt (Literal['orig', 'xyxy', 'cxcywh']): The return format of the bounding box coordinates after they have been 
                                                              adjusted to match the post-letterbox image. Only used if `anno_info` is provided.
                                                                 - orig: Returns the bounding boxes in their original format 
@@ -356,12 +364,18 @@ class LetterBox():
     
     Args:
         size (Union[int, Tuple[int, int]]): Size to transform images into, while preserving their aspect ratio and using padding.
-        fill (Union[int, Tuple[int, int, int]]): The fill color to use for padding, in the form of a RGB tuple.
-                                                 If `int`, it is assumed that the fill color is the same for all RGB channels.
+        fill (FillValue): Pixel fill value used to pad the transformed image. 
+                          This can be a float, integer, sequence of floats, or sequence of integers.
+                          If scalar (float or integer), the value is used for all channels.
+                          If sequence, its length must match the number of channels in the input image.
+                          The fill value should be in the same value space as the expected input images.
+                          For example, if the input images are scaled to [0, 1], 
+                          `fill` should also be scaled to [0, 1].
+                          Default is `0`.
     '''
     def __init__(self, 
                  size: Union[int, Tuple[int, int]], 
-                 fill: Union[int, Tuple[int, int, int]] = 0):
+                 fill: FillValue = 0):
         self.size = misc.make_tuple(size) # Height, width
         self.fill = fill
         
