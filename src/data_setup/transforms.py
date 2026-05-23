@@ -7,6 +7,7 @@ import torchvision.transforms.v2.functional as F
 from torchvision.ops import box_convert
 from torchvision.tv_tensors import BoundingBoxes
 
+import math
 from PIL import Image
 from typing import Tuple, Union, Optional, Literal, Dict, Any, Sequence, TypeAlias
 
@@ -247,9 +248,9 @@ def functional_letterbox(
     # ------------
     pad_w = size[1] - scaled_w
     pad_h = size[0] - scaled_h
-    pad_l = pad_w // 2
+    pad_l = math.ceil(pad_w / 2)
     pad_r = pad_w - pad_l
-    pad_t = pad_h // 2
+    pad_t = math.ceil(pad_h / 2)
     pad_b = pad_h - pad_t
 
     img = F.pad(img, padding = (pad_l, pad_t, pad_r, pad_b), 
@@ -427,9 +428,9 @@ class LetterBox():
         # Padding after resize
         pad_w = self.size[1] - scaled_w
         pad_h = self.size[0] - scaled_h
-        pad_l = pad_w // 2
+        pad_l = math.ceil(pad_w / 2)
         pad_r = pad_w - pad_l
-        pad_t = pad_h // 2
+        pad_t = math.ceil(pad_h / 2)
         pad_b = pad_h - pad_t
         
         # Update transforms
